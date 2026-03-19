@@ -312,12 +312,16 @@ The Gateway features a fully responsive design (built with shadcn/ui + Tailwind 
 
 ---
 
-## Known Limitations
+## 🐛 Known Limitations (Bugs > Features)
 
-| Limitation | Description |
-|------------|-------------|
-| 🔒 **Agent Manager visibility** | Conversations created via Gateway are **not visible** in Agent Manager's sidebar. Root cause: Agent Manager tracks conversations through an internal IPC mechanism (`UnifiedStateSync`) that external gRPC calls cannot reach. Both sides share the same `.pb` files and language servers — conversations are functionally identical and interoperable, but each side maintains its own conversation list. See [PITFALLS.md §16](PITFALLS.md) for full investigation details. |
-| 🔄 **Protocol stability** | The gRPC API was reverse-engineered and may break with Antigravity updates. |
+*"There are currently more bugs than features..." — Here are the known compromises in this version:*
+
+1. **🔒 One-way Visibility**: Conversations created via the Gateway Web UI are **not visible** in the official Antigravity desktop Agent Manager's sidebar. However, conversations created in the desktop app *are* visible on the Web, and the actual chat histories sync perfectly both ways. (See [PITFALLS.md](PITFALLS.md) §16).
+2. **🏗️ Playground Disabled**: The special initialization logic for Playground (no workspace attached) is not fully implemented. Creating new conversations in Playground is temporarily disabled in the UI.
+3. **⚠️ Action Parsing & Approvals**: Parsing of AI Actions (e.g., URL navigation) is incomplete. Most actions are forcefully auto-approved by default. Sometimes things hang at the last step displaying a weird "Proceed/Reject" status. It is what it is.
+4. **↩️ Revert Bugs**: The 'Revert' action currently only seems to delete the AI's response, leaving your user prompt awkwardly hanging in the chat UI. 
+5. **⚙️ CLI Approvals & Workflows**: The CLI headless mode does not yet properly differentiate between "Plan" and "Fast" modes. If your CLI hits an unexpected manual approval state, it doesn't know what to do. We recommend writing robust Workflows that run without human intervention.
+6. **🔄 When in doubt, Reload!**: If the state stream gets stuck or multidevice sync glitches out (hmm...), just forcefully refresh the page.
 
 ## Important Notes
 
