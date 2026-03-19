@@ -10,6 +10,12 @@
 
 **[English Documentation →](README_EN.md)**
 
+<p align="center">
+  <img src="docs/assets/pc.png" width="65%" alt="Antigravity Gateway PC UI" />
+  &nbsp;&nbsp;
+  <img src="docs/assets/mobile.png" width="25%" alt="Antigravity Gateway Mobile UI" />
+</p>
+
 ---
 
 ## 💡 三大目标
