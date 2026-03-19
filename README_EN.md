@@ -324,7 +324,11 @@ The Gateway features a fully responsive design (built with shadcn/ui + Tailwind 
 
 Join our community to share workflows, report bugs, or discuss how to integrate Antigravity into your own tools:
 
-**🎉 Welcome to: Antigravity CLI 交流使用群 (WeChat/QQ)**
+<p align="left">
+  <img src="docs/assets/group.jpg" width="250" alt="WeChat Group QR Code" />
+</p>
+
+**🎉 Welcome to: Antigravity CLI 交流使用群 (WeChat)**
 
 _(If you have great ideas for automation or are stuck with headless development, feel free to join and discuss!)_
 
