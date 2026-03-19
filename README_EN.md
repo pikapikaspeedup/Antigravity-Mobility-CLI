@@ -332,6 +332,12 @@ Join our community to share workflows, report bugs, or discuss how to integrate 
 
 _(If you have great ideas for automation or are stuck with headless development, feel free to join and discuss!)_
 
+## 🙏 Acknowledgements
+
+This project was inspired by and references the following excellent open-source projects. Special thanks to their creators:
+- **[jlcodes99/cockpit-tools](https://github.com/jlcodes99/cockpit-tools)**
+- **[AvenalJ/AntigravityMobile](https://github.com/AvenalJ/AntigravityMobile)**
+
 ---
 
 ## Contributing
@@ -340,12 +346,6 @@ PRs welcome! If you discover new gRPC endpoints or fix routing issues, please up
 - New API methods → `docs/API_REFERENCE.md`
 - New pitfalls → `PITFALLS.md`
 - External API changes → `docs/GATEWAY_API.md`
-
-## 🙏 Acknowledgements
-
-This project was inspired by and references early implementations from the following excellent open-source projects:
-- 🛠️ [jlcodes99/cockpit-tools](https://github.com/jlcodes99/cockpit-tools)
-- 📱 [AvenalJ/AntigravityMobile](https://github.com/AvenalJ/AntigravityMobile)
 
 ## Disclaimer
 
