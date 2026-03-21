@@ -10,6 +10,8 @@ export interface ModelConfig {
   label: string;
   modelOrAlias?: { model?: string };
   quotaInfo?: { remainingFraction?: number };
+  isRecommended?: boolean;
+  tagTitle?: string;
 }
 
 export interface ModelsResponse {
@@ -97,6 +99,21 @@ export interface McpServer {
   description?: string;
 }
 
+// === Knowledge Item Types ===
+
+export interface KnowledgeItem {
+  id: string;
+  title: string;
+  summary: string;
+  references: Array<{ type: string; value: string }>;
+  timestamps: { created: string; modified: string; accessed: string };
+  artifactFiles: string[];
+}
+
+export interface KnowledgeDetail extends KnowledgeItem {
+  artifacts: Record<string, string>;
+}
+
 // === Step Types (match actual protobuf structure) ===
 
 // Step status lifecycle: PENDING → RUNNING → GENERATING → DONE / CANCELED / ERROR
@@ -108,12 +125,30 @@ export type StepStatus =
   | 'CORTEX_STEP_STATUS_CANCELED'
   | 'CORTEX_STEP_STATUS_ERROR';
 
+export interface MessageItem {
+  text?: string;
+  item?: {
+    file?: {
+      absoluteUri?: string;
+      workspaceUrisToRelativePaths?: Record<string, string>;
+    };
+  };
+}
+
+export interface MessageMedia {
+  mimeType?: string;
+  inlineData?: string;
+  uri?: string;
+  thumbnail?: string;
+}
+
 export interface Step {
   type: string;
   status?: string;
   // Each step has one of these populated based on type
   userInput?: {
-    items?: Array<{ text?: string }>;
+    items?: MessageItem[];
+    media?: MessageMedia[];
   };
   plannerResponse?: {
     response?: string;

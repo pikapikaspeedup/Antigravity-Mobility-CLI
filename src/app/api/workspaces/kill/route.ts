@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { discoverLanguageServers } from '@/lib/bridge/gateway';
 import { closeAntigravityWindow } from '@/lib/window-control';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Kill');
 
 export const dynamic = 'force-dynamic';
 
@@ -28,17 +31,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No server found for this workspace' }, { status: 404 });
   }
 
-  console.log(`🛑 [Kill] Trying to elegantly close Antigravity window for workspace="${workspace}"`);
+  log.info({ workspace }, 'Trying to close Antigravity window');
 
   try {
     const success = await closeAntigravityWindow(workspace);
     if (!success) {
-      console.log(`⚠️ Window not found via AppleScript, falling back to process.kill for pid=${target.pid}`);
+      log.warn({ pid: target.pid }, 'Window not found via AppleScript, falling back to process.kill');
       process.kill(target.pid, 'SIGTERM');
     }
     return NextResponse.json({ ok: true, killed: { pid: target.pid, port: target.port, windowClosed: success } });
   } catch (e: any) {
-    console.error(`❌ [Kill] Failed to clean up ${workspace}:`, e.message);
+    log.error({ err: e.message, workspace }, 'Failed to clean up workspace');
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

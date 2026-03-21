@@ -15,6 +15,9 @@ import { spawn, ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { createLogger } from '../logger';
+
+const log = createLogger('Tunnel');
 
 const CONFIG_DIR = join(homedir(), '.gemini', 'antigravity');
 const CONFIG_PATH = join(CONFIG_DIR, 'tunnel_config.json');
@@ -87,7 +90,7 @@ export function startTunnel(port: number, timeoutMs = 30000): Promise<{ success:
         if (tunnelProcess && !tunnelProcess.killed) {
           tunnelRunning = true;
           tunnelError = null;
-          console.log(`🌐 Tunnel started: ${config.url}`);
+          log.info({ url: config.url }, 'Tunnel started');
           resolve({ success: true, url: config.url });
         } else {
           tunnelError = 'Timed out waiting for tunnel';
@@ -107,7 +110,7 @@ export function startTunnel(port: number, timeoutMs = 30000): Promise<{ success:
         tunnelRunning = true;
         tunnelError = null;
         clearTimeout(timer);
-        console.log(`🌐 Tunnel active: ${config.url}`);
+        log.info({ url: config.url }, 'Tunnel active');
         resolve({ success: true, url: config.url });
       }
 
@@ -148,7 +151,7 @@ export function startTunnel(port: number, timeoutMs = 30000): Promise<{ success:
         tunnelError = `cloudflared exited with code ${code}`;
         resolve({ success: false, error: tunnelError });
       } else if (wasRunning) {
-        console.log('🌐 Tunnel disconnected');
+        log.warn('Tunnel disconnected');
         tunnelError = 'Tunnel process exited unexpectedly';
       }
     });
@@ -162,7 +165,7 @@ export function stopTunnel(): { success: boolean } {
   tunnelRunning = false;
   tunnelStarting = false;
   tunnelError = null;
-  console.log('🌐 Tunnel stopped');
+  log.info('Tunnel stopped');
   return { success: true };
 }
 

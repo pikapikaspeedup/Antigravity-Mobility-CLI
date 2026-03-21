@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import { execSync } from 'child_process';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Launch');
 
 export const dynamic = 'force-dynamic';
 
@@ -17,17 +20,17 @@ export async function POST(req: Request) {
   // Remove file:// prefix if present
   const wsPath = workspace.replace(/^file:\/\//, '');
 
-  console.log(`🚀 [Launch] Opening workspace: "${wsPath}"`);
+  log.info({ wsPath }, 'Opening workspace');
 
   try {
     execSync(`"${ANTIGRAVITY_CLI}" --new-window "${wsPath}"`, {
       timeout: 5000,
       stdio: 'ignore',
     });
-    console.log(`🚀 [Launch] Antigravity CLI executed for "${wsPath}"`);
+    log.info({ wsPath }, 'Antigravity CLI executed');
     return NextResponse.json({ ok: true, launched: wsPath });
   } catch (e: any) {
-    console.error(`❌ [Launch] Failed:`, e.message);
+    log.error({ err: e.message, wsPath }, 'Launch failed');
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

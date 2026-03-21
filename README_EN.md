@@ -16,6 +16,16 @@
   <img src="docs/assets/mobile.png" width="25%" alt="Antigravity Gateway Mobile UI" />
 </p>
 
+## 🆕 What's New in v0.2.0
+
+- 📋 **Knowledge Panel** — Browse, edit, and delete Knowledge Items and their Artifacts
+- 📎 **File Attachments** — Reference files with `@` in chat and send them as attachments
+- 🧠 **Active Tasks Panel** — Real-time display of AI Agent task progress (TaskBoundary)
+- 🔀 **Agentic Mode Toggle** — Choose to enable/disable Agentic Mode when sending messages
+- 📊 **Structured Logging** — Migrated to `pino` structured logging with a new Log Viewer panel
+- 🌐 **Tunnel Auto-Start** — Cloudflare Tunnel can auto-connect on Gateway startup
+- 🔧 **Model Selection** — Fixed model ordering, added recommended tags, remembers last selection
+
 ---
 
 ## 💡 Three Goals
@@ -94,6 +104,9 @@ python3 scripts/call_workflow.py   # → creates conversation, runs /ai-topic-di
 
 ### Prerequisites
 
+> ⚠️ **System Requirement**: This project currently **only supports macOS Apple Silicon (M-series chips)**.
+
+- **macOS** (Apple Silicon M1/M2/M3/M4)
 - **Antigravity** desktop app installed and running (at least one workspace open)
 - **Node.js** ≥ 20
 

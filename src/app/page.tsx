@@ -4,8 +4,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from '@/components/sidebar';
 import Chat from '@/components/chat';
 import ChatInput from '@/components/chat-input';
+import KnowledgePanel from '@/components/knowledge-panel';
+import LogViewerPanel from '@/components/log-viewer-panel';
 import { api, connectWs } from '@/lib/api';
 import type { StepsData, ModelConfig, Skill, Workflow } from '@/lib/types';
+import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { Menu, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -22,40 +25,83 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [cascadeStatus, setCascadeStatus] = useState('idle');
+  const [knowledgePanelOpen, setKnowledgePanelOpen] = useState(false);
+  const [logViewerOpen, setLogViewerOpen] = useState(false);
+  const [agenticMode, setAgenticMode] = useState(true);
+  const [activeTasks, setActiveTasks] = useState<ActiveTask[]>([]);
+  const [dismissedTasks, setDismissedTasks] = useState<Set<string>>(new Set());
+  const [sendError, setSendError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const lastStepCountRef = useRef(0);
 
   useEffect(() => {
     api.models().then(d => {
-      setModels(d.clientModelConfigs || []);
-      // Auto-select a model if available and ours is totally fake
-      if (d.clientModelConfigs?.length && currentModel === 'MODEL_PLACEHOLDER_M26') {
-        const m = d.clientModelConfigs.find(x => x.label?.includes('3.5 Sonnet')) || d.clientModelConfigs[0];
-        if (m.modelOrAlias?.model) setCurrentModel(m.modelOrAlias.model);
+      if (d.clientModelConfigs?.length) {
+        // Enforce stable sorting by label length then alphabetically, keeping Recommended first
+        const sortedModels = [...d.clientModelConfigs].sort((a, b) => {
+          if (a.isRecommended !== b.isRecommended) return a.isRecommended ? -1 : 1;
+          return a.label.localeCompare(b.label);
+        });
+        setModels(sortedModels);
+        
+        // Restore saved preference or use Auto
+        const saved = localStorage.getItem('antigravity_selected_model');
+        const defaultModel = saved || 'MODEL_AUTO';
+        
+        // Only set if the saved model actually exists in the fetched list (or is Auto)
+        const exists = defaultModel === 'MODEL_AUTO' || sortedModels.some(m => m.modelOrAlias?.model === defaultModel);
+        if (exists) {
+          setCurrentModel(defaultModel);
+        } else {
+          setCurrentModel('MODEL_AUTO'); // Fallback to Auto
+        }
       }
     }).catch(() => {});
-    api.skills().then(setSkills).catch(() => {});
-    api.workflows().then(setWorkflows).catch(() => {});
+  }, []);
+
+  // Add a separate effect just to persist changes to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('antigravity_selected_model', currentModel);
+    }
   }, [currentModel]);
 
   useEffect(() => {
     wsRef.current = connectWs(
-      (cascadeId, data, active, status) => {
+      (cascadeId, data, active, status, extra) => {
+        // Update active tasks panel for ALL conversations
+        setActiveTasks(prev => {
+          const existing = prev.find(t => t.cascadeId === cascadeId);
+          const newTask: ActiveTask = {
+            cascadeId,
+            title: existing?.title || cascadeId.slice(0, 8),
+            workspace: existing?.workspace || '',
+            stepCount: data.steps?.length || existing?.stepCount || 0,
+            totalSteps: extra?.totalLength || existing?.totalSteps,
+            lastTaskBoundary: extra?.lastTaskBoundary || existing?.lastTaskBoundary,
+            isActive: active,
+            cascadeStatus: status,
+          };
+          if (existing) {
+            return prev.map(t => t.cascadeId === cascadeId ? newTask : t);
+          }
+          return [...prev, newTask];
+        });
+
+        // Update main chat view only for the current active conversation
         setActiveId(cur => {
           if (cur === cascadeId) {
             const newLen = data.steps?.length || 0;
-
-            // Accept any update with steps >= last known count.
-            // This allows: new steps (count grows), status changes, streaming text (same count).
-            // Only reject if newLen < lastStepCountRef (stale data, see PITFALLS.md 坑 9).
             if (newLen > 0 && newLen >= lastStepCountRef.current) {
               lastStepCountRef.current = newLen;
               setSteps(data);
+            } else if (newLen > 0) {
+              console.warn(`[WS] Guard filtered: newLen=${newLen} < lastStepCount=${lastStepCountRef.current} for ${cascadeId.slice(0,8)}`);
             }
-
-            // Always update status signals
             setIsActive(active);
             setCascadeStatus(status);
+          } else {
+            console.log(`[WS] Ignored update for ${cascadeId.slice(0,8)} (active=${cur?.slice(0,8)})`);
           }
           return cur;
         });
@@ -76,26 +122,68 @@ export default function Home() {
   }, []);
 
   const handleSelect = (id: string, title: string) => {
+    console.log(`[Select] ${id.slice(0,8)} "${title}" | wsReady=${wsRef.current?.readyState} lastSteps=${lastStepCountRef.current}`);
     setActiveId(id);
     setActiveTitle(title || id.slice(0, 8));
     setSteps(null);
+    setSendError(null);
     loadSteps(id);
     if (wsRef.current?.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: 'subscribe', cascadeId: id }));
+    } else {
+      console.warn(`[Select] WS not ready (state=${wsRef.current?.readyState}), subscribe skipped for ${id.slice(0,8)}`);
     }
+    // Update the task title in activeTasks
+    setActiveTasks(prev => prev.map(t => t.cascadeId === id ? { ...t, title: title || id.slice(0, 8) } : t));
   };
 
   const handleNew = async (workspace: string) => {
+    console.log(`[NewConv] Creating in workspace: ${workspace}`);
     try {
       const d = await api.createConversation(workspace);
       if (d.error) { alert(d.error); return; }
-      if (d.cascadeId) handleSelect(d.cascadeId, 'New conversation');
+      if (d.cascadeId) {
+        console.log(`[NewConv] Created ${d.cascadeId.slice(0,8)}, selecting...`);
+        handleSelect(d.cascadeId, 'New conversation');
+      }
     } catch (e: unknown) { alert('Failed: ' + (e instanceof Error ? e.message : 'unknown')); }
   };
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, attachments?: any) => {
     if (!activeId) return;
-    try { await api.sendMessage(activeId, text, currentModel); } catch { /* */ }
+    setSendError(null);
+    
+    // Resolve Auto model if selected
+    let targetModel = currentModel;
+    if (targetModel === 'MODEL_AUTO') {
+      // Fallback priority: M26(Opus) -> M37(Pro High) -> M36(Pro Low) -> M35(Sonnet) -> M47(Flash)
+      const priority = ['MODEL_PLACEHOLDER_M26', 'MODEL_PLACEHOLDER_M37', 'MODEL_PLACEHOLDER_M36', 'MODEL_PLACEHOLDER_M35', 'MODEL_PLACEHOLDER_M47'];
+      let found = false;
+      for (const p of priority) {
+        const conf = models.find(m => m.modelOrAlias?.model === p);
+        if (conf && conf.quotaInfo && conf.quotaInfo.remainingFraction !== undefined && conf.quotaInfo.remainingFraction > 0) {
+          targetModel = p;
+          found = true;
+          console.log(`[Auto Resolve] Resolved ${p} (quota=${conf.quotaInfo.remainingFraction})`);
+          break;
+        }
+      }
+      if (!found) {
+        // If all quotas exhausted or info missing, fallback to Flash or whatever is first
+        targetModel = models.find(m => m.modelOrAlias?.model === 'MODEL_PLACEHOLDER_M47')?.modelOrAlias?.model 
+                      || models[0]?.modelOrAlias?.model || 'MODEL_PLACEHOLDER_M26';
+        console.log(`[Auto Resolve] Fallback to ${targetModel} (no quota found)`);
+      }
+    }
+
+    try {
+      await api.sendMessage(activeId, text, targetModel, agenticMode, attachments);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      console.error(`[Send] Failed for ${activeId.slice(0,8)}: ${msg}`);
+      setSendError(`发送失败: ${msg}`);
+      setTimeout(() => setSendError(null), 6000);
+    }
   };
 
   const handleProceed = async (uri: string) => {
@@ -114,7 +202,35 @@ export default function Home() {
 
   const handleRevert = async (stepIndex: number) => {
     if (!activeId) return;
-    try { await api.revert(activeId, stepIndex, currentModel); } catch { /* */ }
+
+    // Find the actual revert target:
+    // If the step at stepIndex is USER_INPUT, revert to the step before it
+    // so the user's own message is also removed.
+    let targetIndex = stepIndex;
+    if (steps?.steps?.[stepIndex]?.type === 'CORTEX_STEP_TYPE_USER_INPUT') {
+      // Walk backward to find the last non-ephemeral step before this USER_INPUT
+      targetIndex = Math.max(0, stepIndex - 1);
+      while (targetIndex > 0) {
+        const t = steps.steps[targetIndex]?.type || '';
+        if (t !== 'CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE' && t !== 'CORTEX_STEP_TYPE_CHECKPOINT') break;
+        targetIndex--;
+      }
+    }
+
+    // Immediately truncate local steps for instant UI feedback
+    if (steps?.steps) {
+      const truncated = steps.steps.slice(0, targetIndex + 1);
+      lastStepCountRef.current = truncated.length;
+      setSteps({ ...steps, steps: truncated });
+    }
+
+    try {
+      await api.revert(activeId, targetIndex, currentModel);
+      // Reset monotonic guard — revert produces a shorter steps array
+      lastStepCountRef.current = 0;
+      // Fallback refresh in case WS push is delayed
+      setTimeout(() => loadSteps(activeId), 800);
+    } catch { /* */ }
   };
 
   const handleExportMarkdown = useCallback(() => {
@@ -156,6 +272,7 @@ export default function Home() {
   const isRunning = isActive;
 
   return (
+    <>
     <div className="flex h-dvh overflow-hidden bg-background">
       <Sidebar
         activeId={activeId}
@@ -163,6 +280,8 @@ export default function Home() {
         onNew={handleNew}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onKnowledgeOpen={() => setKnowledgePanelOpen(true)}
+        onLogsOpen={() => setLogViewerOpen(true)}
       />
 
       <main className="flex flex-col flex-1 min-w-0 h-dvh">
@@ -197,12 +316,18 @@ export default function Home() {
         {/* Chat Area */}
         <div className="flex-1 relative overflow-hidden bg-muted/20">
           <Chat steps={steps} loading={loading} currentModel={currentModel} onProceed={handleProceed} onRevert={handleRevert} />
+          {sendError && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-destructive text-destructive-foreground px-5 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {sendError}
+            </div>
+          )}
         </div>
 
         {/* Input Area */}
         {activeId && (
           <div className="shrink-0 z-10">
             <ChatInput
+              activeId={activeId}
               onSend={handleSend}
               onCancel={handleCancel}
               disabled={loading}
@@ -213,10 +338,21 @@ export default function Home() {
               onModelChange={setCurrentModel}
               skills={skills}
               workflows={workflows}
+              agenticMode={agenticMode}
+              onAgenticModeChange={setAgenticMode}
             />
           </div>
         )}
       </main>
     </div>
+    <KnowledgePanel open={knowledgePanelOpen} onClose={() => setKnowledgePanelOpen(false)} />
+    <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
+    <ActiveTasksPanel
+      tasks={activeTasks.filter(t => !dismissedTasks.has(t.cascadeId))}
+      onSelect={(id, title) => handleSelect(id, title)}
+      onDismiss={(id) => setDismissedTasks(prev => new Set(prev).add(id))}
+      activeCascadeId={activeId}
+    />
+    </>
   );
 }

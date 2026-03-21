@@ -188,15 +188,18 @@ function groupSteps(taggedSteps: { step: Step; originalIndex: number }[]): Rende
   return items;
 }
 
-function StepBubble({ step, originalIndex, totalSteps, allSteps, onProceed, onRevert }: { step: Step; originalIndex: number; totalSteps: number; allSteps: Step[]; onProceed?: (uri: string) => void; onRevert?: (stepIndex: number) => void }) {
+function StepBubble({ step, originalIndex, totalSteps, allSteps, isFastMode, onProceed, onRevert }: { step: Step; originalIndex: number; totalSteps: number; allSteps: Step[]; isFastMode?: boolean; onProceed?: (uri: string) => void; onRevert?: (stepIndex: number) => void }) {
   const type = step.type || '';
 
   if (type === 'CORTEX_STEP_TYPE_USER_INPUT') {
     const items = step.userInput?.items || [];
+    const media = step.userInput?.media || [];
     const text = items.filter(i => i.text).map(i => i.text).join('').trim();
-    if (!text) return null;
+    const files = items.filter(i => i.item?.file).map(i => Object.values(i.item!.file!.workspaceUrisToRelativePaths || {})[0] || i.item!.file!.absoluteUri?.split('/').pop());
+
+    if (!text && files.length === 0 && media.length === 0) return null;
     return (
-      <div className="flex justify-end mt-8 mb-6 max-w-4xl mx-auto w-full px-4 sm:px-6 group">
+      <div className={cn('flex justify-end mb-6 max-w-4xl mx-auto w-full px-4 sm:px-6 group', isFastMode ? 'mt-4' : 'mt-8')}>
         <div className="flex gap-4 max-w-[85%] sm:max-w-[70%] items-start justify-end">
           {onRevert && (
             <Button
@@ -209,8 +212,30 @@ function StepBubble({ step, originalIndex, totalSteps, allSteps, onProceed, onRe
               <RotateCcw className="h-4 w-4" />
             </Button>
           )}
-          <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-5 py-3.5 text-sm leading-relaxed shadow-sm">
-            <div className="whitespace-pre-wrap">{text}</div>
+          <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-5 py-3.5 text-sm leading-relaxed shadow-sm flex flex-col gap-3">
+            {media.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {media.map((m, idx) => (
+                  <img
+                    key={idx}
+                    src={m.inlineData ? `data:${m.mimeType || 'image/png'};base64,${m.inlineData}` : m.uri}
+                    alt="Attached Graphic"
+                    className="max-w-[200px] max-h-[200px] object-cover rounded-md border border-primary-foreground/20"
+                  />
+                ))}
+              </div>
+            )}
+            {text && <div className="whitespace-pre-wrap">{text}</div>}
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-1">
+                {files.map((file, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 bg-background/20 text-primary-foreground text-xs px-2 py-1 rounded border border-primary-foreground/20">
+                    <FileCode className="w-3 h-3" />
+                    <span className="truncate max-w-[150px]">{file}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <Avatar className="h-8 w-8 shrink-0 border bg-background mt-1 hidden sm:flex">
             <AvatarFallback className="bg-zinc-800 text-white text-[10px] font-bold">USER</AvatarFallback>
@@ -227,12 +252,20 @@ function StepBubble({ step, originalIndex, totalSteps, allSteps, onProceed, onRe
     // Show streaming text even if short; only hide empty DONE responses
     if (!streaming && (!text || text.length < 3)) return null;
     return (
-      <div className="flex mt-8 mb-4 max-w-4xl mx-auto w-full px-4 sm:px-6 group">
+      <div className={cn('flex max-w-4xl mx-auto w-full px-4 sm:px-6 group', isFastMode ? 'mt-4 mb-2' : 'mt-8 mb-4')}>
         <div className="flex gap-4 max-w-full items-start w-full">
           <Avatar className="h-8 w-8 shrink-0 border bg-background mt-1">
-            <AvatarFallback className="bg-indigo-600 text-white text-[10px] font-bold">AI</AvatarFallback>
+            <AvatarFallback className={cn(
+              'text-white text-[10px] font-bold',
+              isFastMode ? 'bg-gradient-to-br from-purple-600 to-indigo-600' : 'bg-indigo-600'
+            )}>
+              {isFastMode ? '⚡' : 'AI'}
+            </AvatarFallback>
           </Avatar>
-          <div className="flex-1 bg-card border rounded-2xl rounded-tl-sm px-6 py-5 text-[15px] leading-relaxed chat-markdown shadow-xs overflow-x-auto min-w-0">
+          <div className={cn(
+            'flex-1 rounded-2xl rounded-tl-sm px-6 py-5 text-[15px] leading-relaxed chat-markdown overflow-x-auto min-w-0',
+            isFastMode ? 'bg-card/50 shadow-none' : 'bg-card border shadow-xs'
+          )}>
             {text ? (
               <div dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />
             ) : streaming ? (
@@ -384,6 +417,12 @@ export default function Chat({ steps, loading, onProceed, onRevert, totalSteps: 
     return groupSteps(visible);
   }, [steps]);
 
+  // Detect Fast mode: no TASK_BOUNDARY steps in the conversation
+  const isFastMode = useMemo(() => {
+    if (!steps?.steps || steps.steps.length === 0) return false;
+    return !steps.steps.some(s => s.type === 'CORTEX_STEP_TYPE_TASK_BOUNDARY');
+  }, [steps]);
+
   const totalSteps = steps?.steps?.length || 0;
   const allSteps = steps?.steps || [];
 
@@ -442,7 +481,7 @@ export default function Chat({ steps, loading, onProceed, onRevert, totalSteps: 
         {renderItems.map((item, i) =>
           item.type === 'tools'
             ? <div className="max-w-4xl mx-auto w-full px-4 sm:px-6" key={i}><ToolGroup steps={item.steps} /></div>
-            : <StepBubble key={i} step={item.step} originalIndex={item.originalIndex} totalSteps={totalSteps} allSteps={allSteps} onProceed={onProceed} onRevert={onRevert} />
+            : <StepBubble key={i} step={item.step} originalIndex={item.originalIndex} totalSteps={totalSteps} allSteps={allSteps} isFastMode={isFastMode} onProceed={onProceed} onRevert={onRevert} />
         )}
         <div ref={bottomRef} className="h-4 w-full shrink-0" />
       </div>

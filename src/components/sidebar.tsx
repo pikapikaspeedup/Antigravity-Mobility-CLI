@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   Plus, ChevronRight, Puzzle, Zap, Gamepad2, MessageSquare, FolderOpen, ScrollText,
-  Server as ServerIcon, Power, PowerOff, EyeOff, Eye, Loader2, ExternalLink,
+  Server as ServerIcon, Power, PowerOff, EyeOff, Eye, Loader2, ExternalLink, BookOpen, Terminal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +23,8 @@ interface SidebarProps {
   onNew: (workspace: string) => void;
   open: boolean;
   onClose: () => void;
+  onKnowledgeOpen?: () => void;
+  onLogsOpen?: () => void;
 }
 
 function getWorkspaceName(uri: string) {
@@ -32,7 +34,7 @@ function getWorkspaceName(uri: string) {
   return parts[parts.length - 1] || parts[parts.length - 2] || uri;
 }
 
-export default function Sidebar({ activeId, onSelect, onNew, open, onClose }: SidebarProps) {
+export default function Sidebar({ activeId, onSelect, onNew, open, onClose, onKnowledgeOpen, onLogsOpen }: SidebarProps) {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -293,6 +295,7 @@ export default function Sidebar({ activeId, onSelect, onNew, open, onClose }: Si
                       {groups[wsName].map(c => (
                         <Button
                           key={c.id}
+                          ref={activeId === c.id ? (el) => { el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } : undefined}
                           variant="ghost"
                           className={cn(
                             "w-full justify-start font-normal h-8 px-2 text-sm rounded-md transition-all",
@@ -317,7 +320,7 @@ export default function Sidebar({ activeId, onSelect, onNew, open, onClose }: Si
         {/* Bottom Tools Panel */}
         <div className="h-[260px] p-4 flex flex-col pt-2 shrink-0 bg-muted/20">
           <Tabs defaultValue="skills" className="w-full h-full flex flex-col">
-            <TabsList className="w-full grid grid-cols-4 h-8 p-1 bg-background border">
+            <TabsList className="w-full grid grid-cols-6 h-8 p-1 bg-background border">
               <TabsTrigger value="skills" className="text-[10px] font-bold">
                 Skills
               </TabsTrigger>
@@ -329,6 +332,12 @@ export default function Sidebar({ activeId, onSelect, onNew, open, onClose }: Si
               </TabsTrigger>
               <TabsTrigger value="servers" className="text-[10px] font-bold">
                 Servers
+              </TabsTrigger>
+              <TabsTrigger value="knowledge" className="text-[10px] font-bold" onClick={() => onKnowledgeOpen?.()}>
+                <BookOpen className="w-3 h-3 mr-0.5" />KI
+              </TabsTrigger>
+              <TabsTrigger value="logs" className="text-[10px] font-bold" onClick={() => onLogsOpen?.()}>
+                <Terminal className="w-3 h-3 mr-0.5" />Logs
               </TabsTrigger>
             </TabsList>
             
@@ -567,6 +576,7 @@ export default function Sidebar({ activeId, onSelect, onNew, open, onClose }: Si
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
       </aside>
     </>
   );

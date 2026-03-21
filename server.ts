@@ -12,6 +12,9 @@ import { createServer } from 'http';
 import next from 'next';
 import { parse } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { createLogger } from './src/lib/logger';
+
+const log = createLogger('Server');
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
@@ -53,15 +56,105 @@ app.prepare().then(() => {
   });
 
   wss.on('connection', (ws: WebSocket) => {
-    let abortStream: (() => void) | null = null;
+    const activeStreams = new Map<string, { abort: () => void; fullSteps: any[] }>();
+
+    function startStreamForId(cascadeId: string, conn: { port: number; csrf: string }) {
+      // Clean up existing stream for this ID if any
+      const existing = activeStreams.get(cascadeId);
+      if (existing) { existing.abort(); activeStreams.delete(cascadeId); }
+
+      let fullSteps: any[] = [];
+
+      const abort = grpc.streamAgentState(
+        conn.port,
+        conn.csrf,
+        cascadeId,
+        (update: any) => {
+          const stepsUpdate = update?.mainTrajectoryUpdate?.stepsUpdate;
+          const status = update?.status || '';
+          const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
+          const cascadeStatus = status.replace('CASCADE_RUN_STATUS_', '').toLowerCase();
+
+          // Extract latest task boundary for progress panel
+          let lastTaskBoundary: any = null;
+          const allSteps = stepsUpdate?.steps || [];
+          for (let i = allSteps.length - 1; i >= 0; i--) {
+            if (allSteps[i]?.type === 'CORTEX_STEP_TYPE_TASK_BOUNDARY') {
+              lastTaskBoundary = allSteps[i].taskBoundary;
+              break;
+            }
+          }
+
+          if (stepsUpdate?.steps?.length) {
+            const indices: number[] = stepsUpdate.indices || [];
+            const newSteps: any[] = stepsUpdate.steps || [];
+            const totalLength: number = stepsUpdate.totalLength || 0;
+
+            if (indices.length > 0 && indices.length === newSteps.length) {
+              if (totalLength > fullSteps.length) {
+                fullSteps.length = totalLength;
+              }
+              for (let i = 0; i < indices.length; i++) {
+                fullSteps[indices[i]] = newSteps[i];
+              }
+            } else if (newSteps.length > fullSteps.length) {
+              fullSteps = [...newSteps];
+            } else if (newSteps.length === fullSteps.length) {
+              fullSteps = [...newSteps];
+            }
+
+            // Search fullSteps for latest task boundary (more reliable)
+            for (let i = fullSteps.length - 1; i >= 0; i--) {
+              if (fullSteps[i]?.type === 'CORTEX_STEP_TYPE_TASK_BOUNDARY') {
+                lastTaskBoundary = fullSteps[i].taskBoundary;
+                break;
+              }
+            }
+
+            const cleanSteps = fullSteps.filter(s => s != null);
+            ws.send(JSON.stringify({
+              type: 'steps', cascadeId, data: { steps: cleanSteps }, isActive, cascadeStatus,
+              totalLength: stepsUpdate.totalLength || cleanSteps.length,
+              lastTaskBoundary,
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'status', cascadeId, isActive, cascadeStatus,
+              stepCount: fullSteps.filter(s => s != null).length,
+              lastTaskBoundary,
+            }));
+          }
+        },
+        async (err: Error) => {
+          log.warn({ cascadeId: cascadeId.slice(0,8), err: err.message }, 'Stream ended, reconnecting...');
+          setTimeout(async () => {
+            if (ws.readyState === ws.OPEN) {
+              await ensureBridge();
+              await gateway.refreshOwnerMap();
+              const newOwner = gateway.getOwnerConnection(cascadeId);
+              if (newOwner) {
+                log.info({ cascadeId: cascadeId.slice(0,8), port: newOwner.port }, 'Stream reconnected');
+                startStreamForId(cascadeId, newOwner);
+              }
+            }
+          }, 2000);
+        }
+      );
+
+      activeStreams.set(cascadeId, { abort, fullSteps });
+    }
 
     ws.on('message', async (raw: Buffer) => {
       try {
         await ensureBridge();
         const msg = JSON.parse(raw.toString());
+
+        // Single subscribe (backward compatible — clears all previous streams)
         if (msg.type === 'subscribe' && msg.cascadeId) {
           const cascadeId = msg.cascadeId;
-          if (abortStream) { abortStream(); abortStream = null; }
+          // Close all existing streams
+          for (const [, s] of activeStreams) s.abort();
+          activeStreams.clear();
 
           if (!gateway.convOwnerMap.has(cascadeId) || Date.now() - gateway.ownerMapAge > 30_000) {
             await gateway.refreshOwnerMap();
@@ -72,98 +165,62 @@ app.prepare().then(() => {
             ws.send(JSON.stringify({ type: 'error', message: 'No server found for this conversation' }));
             return;
           }
-          console.log(`📡 Stream subscribe: ${cascadeId.slice(0,8)} → port ${owner.port}`);
+          log.info({ cascadeId: cascadeId.slice(0,8), port: owner.port }, 'Stream subscribe');
+          startStreamForId(cascadeId, owner);
+        }
 
-          let fullSteps: any[] = [];
-
-          function startStream(conn: { port: number; csrf: string }) {
-            const abort = grpc.streamAgentState(
-              conn.port,
-              conn.csrf,
-              cascadeId,
-              (update: any) => {
-                const stepsUpdate = update?.mainTrajectoryUpdate?.stepsUpdate;
-                const status = update?.status || '';
-                const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
-                const cascadeStatus = status.replace('CASCADE_RUN_STATUS_', '').toLowerCase();
-
-                if (stepsUpdate?.steps?.length) {
-                  const indices: number[] = stepsUpdate.indices || [];
-                  const newSteps: any[] = stepsUpdate.steps || [];
-                  const totalLength: number = stepsUpdate.totalLength || 0;
-
-                  if (indices.length > 0 && indices.length === newSteps.length) {
-                    if (totalLength > fullSteps.length) {
-                      fullSteps.length = totalLength;
-                    }
-                    for (let i = 0; i < indices.length; i++) {
-                      fullSteps[indices[i]] = newSteps[i];
-                    }
-                  } else if (newSteps.length > fullSteps.length) {
-                    fullSteps = [...newSteps];
-                  } else if (newSteps.length === fullSteps.length) {
-                    fullSteps = [...newSteps];
-                  }
-
-                  const cleanSteps = fullSteps.filter(s => s != null);
-                  ws.send(JSON.stringify({ type: 'steps', cascadeId, data: { steps: cleanSteps }, isActive, cascadeStatus }));
-                } else {
-                  ws.send(JSON.stringify({ type: 'status', cascadeId, isActive, cascadeStatus }));
-                }
-              },
-              async (err: Error) => {
-                console.log(`Stream ended for ${cascadeId.slice(0,8)}: ${err.message}, reconnecting...`);
-                setTimeout(async () => {
-                  if (ws.readyState === ws.OPEN) {
-                    await ensureBridge();
-                    await gateway.refreshOwnerMap();
-                    const newOwner = gateway.getOwnerConnection(cascadeId);
-                    if (newOwner) {
-                      console.log(`📡 Stream reconnect: ${cascadeId.slice(0,8)} → port ${newOwner.port}`);
-                      fullSteps = [];
-                      startStream(newOwner);
-                    }
-                  }
-                }, 2000);
-              }
-            );
-            abortStream = abort;
+        // Multi-subscribe (add streams without clearing existing)
+        if (msg.type === 'multi-subscribe' && Array.isArray(msg.cascadeIds)) {
+          if (Date.now() - gateway.ownerMapAge > 30_000) {
+            await gateway.refreshOwnerMap();
           }
-
-          startStream(owner);
+          for (const cascadeId of msg.cascadeIds) {
+            if (activeStreams.has(cascadeId)) continue; // already streaming
+            const owner = gateway.getOwnerConnection(cascadeId);
+            if (owner) {
+              log.info({ cascadeId: cascadeId.slice(0,8), port: owner.port }, 'Multi-subscribe');
+              startStreamForId(cascadeId, owner);
+            }
+          }
         }
 
         if (msg.type === 'unsubscribe') {
-          if (abortStream) { abortStream(); abortStream = null; }
+          if (msg.cascadeId) {
+            const s = activeStreams.get(msg.cascadeId);
+            if (s) { s.abort(); activeStreams.delete(msg.cascadeId); }
+          } else {
+            for (const [, s] of activeStreams) s.abort();
+            activeStreams.clear();
+          }
         }
       } catch {}
     });
 
     ws.on('close', () => {
-      if (abortStream) { abortStream(); abortStream = null; }
+      for (const [, s] of activeStreams) s.abort();
+      activeStreams.clear();
     });
   });
 
   server.listen(port, hostname, async () => {
-    console.log(`\n🚀 Antigravity Gateway running on http://${hostname}:${port}`);
-    console.log(`   Single-port mode: Next.js + API + WebSocket\n`);
-    console.log(`📱 Open on phone: http://<your-ip>:${port}\n`);
+    log.info({ hostname, port }, '🚀 Antigravity Gateway running');
+    log.info('Single-port mode: Next.js + API + WebSocket');
 
     // --- Auto-start Cloudflare Tunnel ---
     try {
       const tunnel = await import('./src/lib/bridge/tunnel');
       const config = tunnel.loadTunnelConfig();
       if (config?.autoStart && config.tunnelName) {
-        console.log(`🌐 Auto-starting tunnel "${config.tunnelName}"...`);
+        log.info({ tunnelName: config.tunnelName }, '🌐 Auto-starting tunnel...');
         const result = await tunnel.startTunnel(port);
         if (result.success) {
-          console.log(`🌐 Tunnel active: ${result.url}`);
+          log.info({ url: result.url }, '🌐 Tunnel active');
         } else {
-          console.log(`🌐 Tunnel failed: ${result.error}`);
+          log.warn({ error: result.error }, '🌐 Tunnel failed');
         }
       }
     } catch (err: any) {
-      console.log(`🌐 Tunnel auto-start skipped: ${err.message}`);
+      log.warn({ err: err.message }, '🌐 Tunnel auto-start skipped');
     }
   });
 

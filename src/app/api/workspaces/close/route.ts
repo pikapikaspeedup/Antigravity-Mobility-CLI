@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
+import { createLogger } from '@/lib/logger';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { minimizeAntigravityWindow } from '@/lib/window-control';
 
 export const dynamic = 'force-dynamic';
+
+const log = createLogger('Workspace');
 
 const DATA_DIR = path.join(process.cwd(), '..', 'data');
 const HIDDEN_FILE = path.join(DATA_DIR, 'hidden_workspaces.json');
@@ -36,12 +39,12 @@ export async function POST(req: Request) {
     writeHidden(hidden);
   }
 
-  console.log(`👁️‍🗨️ [Close] Hidden workspace from UI: "${workspace}" (server still running)`);
+  log.info({ workspace }, 'Hidden workspace from UI (server still running)');
   
   // Also try to minimize the actual Antigravity window so it's out of the way
   const windowMinimized = await minimizeAntigravityWindow(workspace);
   if (windowMinimized) {
-    console.log(`📉 [Minimize] Successfully minimized Antigravity window for "${workspace}"`);
+    log.info({ workspace }, 'Minimized Antigravity window');
   }
 
   return NextResponse.json({ ok: true, hidden: true, windowMinimized });
@@ -66,7 +69,7 @@ export async function DELETE(req: Request) {
   const hidden = readHidden().filter(w => w !== workspace);
   writeHidden(hidden);
 
-  console.log(`👁️ [Close] Unhidden workspace: "${workspace}"`);
+  log.info({ workspace }, 'Unhidden workspace');
   return NextResponse.json({ ok: true, hidden: false });
 }
 

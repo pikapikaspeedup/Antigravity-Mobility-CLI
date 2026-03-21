@@ -10,6 +10,9 @@ import { homedir } from 'os';
 import { discoverLanguageServers, getLanguageServer } from './discovery';
 import { getApiKey } from './statedb';
 import * as grpc from './grpc';
+import { createLogger } from '../logger';
+
+const log = createLogger('Gateway');
 
 // Re-export bridge modules for convenience
 export { discoverLanguageServers, getLanguageServer } from './discovery';
@@ -32,7 +35,7 @@ export function getDefaultConnection() {
 }
 
 // --- Conversation → Owner Server Mapping ---
-export interface OwnerInfo { port: number; csrf: string; apiKey: string; stepCount: number; }
+export interface OwnerInfo { port: number; csrf: string; apiKey: string; stepCount: number; workspace?: string; }
 export const convOwnerMap = new Map<string, OwnerInfo>();
 export let ownerMapAge = 0;
 
@@ -49,7 +52,7 @@ const PRE_REG_TTL_MS = 60_000;
 export function preRegisterOwner(cascadeId: string, info: OwnerInfo) {
   preRegisteredOwners.set(cascadeId, { ...info, registeredAt: Date.now() });
   convOwnerMap.set(cascadeId, info);
-  console.log(`📌 [OwnerMap] Pre-registered ${cascadeId.slice(0,8)} → port ${info.port}`);
+  log.info({ cascadeId: cascadeId.slice(0,8), port: info.port }, 'Pre-registered owner');
 }
 
 /** Get the owner server connection for a specific conversation */
@@ -57,18 +60,18 @@ export function getOwnerConnection(cascadeId: string) {
   // 1. Check main ownerMap (populated by refreshOwnerMap)
   const owner = convOwnerMap.get(cascadeId);
   if (owner) {
-    console.log(`🗺️ [OwnerMap] ${cascadeId.slice(0,8)} → port ${owner.port} (from ownerMap)`);
+    log.debug({ cascadeId: cascadeId.slice(0,8), port: owner.port, source: 'ownerMap' }, 'Owner lookup');
     return owner;
   }
   // 2. Check pre-registered owners (survives refresh cycles)
   const preReg = preRegisteredOwners.get(cascadeId);
   if (preReg && Date.now() - preReg.registeredAt < PRE_REG_TTL_MS) {
-    console.log(`📌 [OwnerMap] ${cascadeId.slice(0,8)} → port ${preReg.port} (from pre-registration, age=${Math.round((Date.now() - preReg.registeredAt)/1000)}s)`);
+    log.debug({ cascadeId: cascadeId.slice(0,8), port: preReg.port, source: 'pre-reg', ageSec: Math.round((Date.now() - preReg.registeredAt)/1000) }, 'Owner lookup');
     return preReg;
   }
   // 3. Fallback
   const conns = getAllConnections();
-  console.log(`🗺️ [OwnerMap] ${cascadeId.slice(0,8)} → NOT in ownerMap, falling back to first of ${conns.length} server(s)`);
+  log.debug({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length, source: 'fallback' }, 'Owner lookup fallback');
   return conns.length > 0 ? conns[0] : null;
 }
 
@@ -84,7 +87,7 @@ export async function refreshOwnerMap() {
     }
   }
 
-  console.log(`🔄 [OwnerMap] Refreshing from ${conns.length} server(s): ${conns.map(c => `${c.port}(${serverWorkspaceMap.get(c.port)?.split('/').pop() || '?'})`).join(', ')}`);
+  log.info({ serverCount: conns.length, servers: conns.map(c => `${c.port}(${serverWorkspaceMap.get(c.port)?.split('/').pop() || '?'})`).join(', ') }, 'OwnerMap refreshing');
 
   const wsMatched = new Map<string, OwnerInfo>();
   const scFallback = new Map<string, OwnerInfo>();
@@ -95,15 +98,16 @@ export async function refreshOwnerMap() {
       const summaries = data?.trajectorySummaries || {};
       const serverWs = serverWorkspaceMap.get(conn.port) || '';
       const convCount = Object.keys(summaries).length;
-      console.log(`🔄 [OwnerMap] port=${conn.port} returned ${convCount} conversation(s), serverWs="${serverWs.split('/').pop()}"`);
+      log.debug({ port: conn.port, convCount, serverWs: serverWs.split('/').pop() }, 'Server trajectories loaded');
 
       for (const [id, info] of Object.entries(summaries) as [string, any][]) {
         const steps = info.stepCount || 0;
-        const ownerEntry: OwnerInfo = { port: conn.port, csrf: conn.csrf, apiKey: conn.apiKey, stepCount: steps };
-
         const convWorkspaces: string[] = (info.workspaces || [])
           .map((w: any) => w.workspaceFolderAbsoluteUri || '')
           .filter(Boolean);
+          
+        const ownerWorkspace = convWorkspaces[0]?.replace('file://', '');
+        const ownerEntry: OwnerInfo = { port: conn.port, csrf: conn.csrf, apiKey: conn.apiKey, stepCount: steps, workspace: ownerWorkspace };
 
         const matched = serverWs && convWorkspaces.some(ws => serverWs.includes(ws) || ws.includes(serverWs));
         if (matched) {
@@ -119,7 +123,7 @@ export async function refreshOwnerMap() {
         }
       }
     } catch (e: any) {
-      console.warn(`❌ [OwnerMap] Failed to get trajectories from port ${conn.port}:`, e.message);
+      log.warn({ port: conn.port, err: e.message }, 'Failed to get trajectories');
     }
   }
 
@@ -142,7 +146,7 @@ export async function refreshOwnerMap() {
       preRegisteredOwners.delete(id); // expired
     } else if (!convOwnerMap.has(id)) {
       convOwnerMap.set(id, preReg);
-      console.log(`📌 [OwnerMap] Preserved pre-registered ${id.slice(0,8)} → port ${preReg.port} (age=${Math.round((now - preReg.registeredAt)/1000)}s)`);
+      log.debug({ cascadeId: id.slice(0,8), port: preReg.port, ageSec: Math.round((now - preReg.registeredAt)/1000) }, 'Preserved pre-reg');
     } else {
       // Server caught up, clean pre-registration
       preRegisteredOwners.delete(id);
@@ -150,13 +154,13 @@ export async function refreshOwnerMap() {
   }
 
   ownerMapAge = Date.now();
-  console.log(`🔄 [OwnerMap] Rebuilt: ${convOwnerMap.size} total conversations mapped (${preRegisteredOwners.size} pre-registered pending)`);
+  log.info({ total: convOwnerMap.size, preRegPending: preRegisteredOwners.size }, 'OwnerMap rebuilt');
 
   for (const id of allIds) {
     const matched = wsMatched.get(id);
     const fallback = scFallback.get(id);
     if (matched && fallback && matched.port !== fallback.port) {
-      console.log(`🔀 Owner routing: ${id.slice(0,8)} → port ${matched.port} (workspace match) instead of ${fallback.port} (stepCount ${fallback.stepCount})`);
+      log.debug({ cascadeId: id.slice(0,8), matchedPort: matched.port, fallbackPort: fallback.port, fallbackSteps: fallback.stepCount }, 'Owner routed by workspace match');
     }
   }
 }

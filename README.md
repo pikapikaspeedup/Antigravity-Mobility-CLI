@@ -16,6 +16,16 @@
   <img src="docs/assets/mobile.png" width="25%" alt="Antigravity Gateway Mobile UI" />
 </p>
 
+## 🆕 v0.2.0 更新内容
+
+- 📋 **Knowledge Panel** — 新增知识库管理面板，可浏览、编辑、删除 Knowledge Items 及其 Artifacts
+- 📎 **文件附件** — 聊天中支持 `@` 引用文件并作为附件发送
+- 🧠 **Active Tasks 面板** — 实时展示 AI Agent 的任务进度（TaskBoundary）
+- 🔀 **Agentic Mode 开关** — 发送消息时可选择开启/关闭 Agentic 模式
+- 📊 **结构化日志** — 全面迁移至 `pino` 结构化日志，新增 Log Viewer 面板
+- 🌐 **隧道自启动** — Cloudflare Tunnel 可在启动 Gateway 时自动连接
+- 🔧 **模型选择优化** — 模型列表排序固定、新增推荐标签、记忆上次选择
+
 ---
 
 ## 💡 三大目标
@@ -94,6 +104,9 @@ python3 scripts/call_workflow.py   # → 创建对话，执行 /ai-topic-discove
 
 ### 前提条件
 
+> ⚠️ **系统要求**：本项目目前**仅支持 macOS Apple Silicon（M 系列芯片）**系统。
+
+- **macOS** (Apple Silicon M1/M2/M3/M4)
 - **Antigravity** 桌面应用已安装并运行（至少打开一个 workspace）
 - **Node.js** ≥ 20
 

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createLogger } from '@/lib/logger';
 import path from 'path';
 import { readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
@@ -11,6 +12,8 @@ import {
 import { mkdirSync } from 'fs';
 
 export const dynamic = 'force-dynamic';
+
+const log = createLogger('NewConv');
 
 const CONVERSATIONS_DIR = path.join(homedir(), '.gemini/antigravity/conversations');
 
@@ -112,7 +115,7 @@ export async function POST(req: Request) {
     let pgServer = servers.find(s => s.workspace?.endsWith('/playground') || s.workspace?.includes('/playground/'));
 
     if (!pgServer) {
-      console.log(`🚀 [NewConv] No Playground server found. Auto-launching one...`);
+      log.info('No Playground server found, auto-launching...');
       try {
         const { execSync } = require('child_process');
         const ANTIGRAVITY_CLI = '/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity';
@@ -130,7 +133,7 @@ export async function POST(req: Request) {
           retries--;
         }
       } catch (e: any) {
-        console.error(`❌ [NewConv] Failed to launch Playground:`, e.message);
+        log.error({ err: e.message }, 'Failed to launch Playground');
       }
     }
 
@@ -155,16 +158,15 @@ export async function POST(req: Request) {
 
   // --- Normal workspace flow ---
   const wsUri = workspace;
-  console.log(`📝 [NewConv] ====== START ======`);
-  console.log(`📝 [NewConv] Raw workspace from request body: "${workspace}"`);
-  console.log(`📝 [NewConv] Resolved wsUri: "${wsUri}"`);
+  log.info({ workspace, wsUri }, 'New conversation started');
+  log.debug({ rawWorkspace: workspace, resolvedUri: wsUri }, 'Request details');
 
   // Find a matching server for this workspace
   const srv = getLanguageServer(wsUri);
   const isMatch = !!srv && (srv.workspace === wsUri || srv.workspace?.includes(wsUri) || wsUri.includes(srv.workspace || '\0'));
 
   if (!srv || !isMatch) {
-    console.log(`📝 [NewConv] No matching server for "${wsUri}" — workspace needs to be opened first`);
+    log.warn({ wsUri }, 'No matching server — workspace needs to be opened first');
     return NextResponse.json({
       error: 'workspace_not_running',
       message: `Workspace is not running. Please open it in Antigravity first.`,
@@ -172,32 +174,32 @@ export async function POST(req: Request) {
     }, { status: 503 });
   }
 
-  console.log(`📝 [NewConv] Matched server: port=${srv.port}, pid=${srv.pid}, workspace="${srv.workspace}"`);
+  log.info({ port: srv.port, pid: srv.pid, workspace: srv.workspace }, 'Matched server');
 
   try {
     // Step 1: AddTrackedWorkspace
     const workspacePath = wsUri.replace(/^file:\/\//, '');
-    console.log(`📝 [NewConv] Step1 AddTrackedWorkspace → port ${srv.port}, body={"workspace":"${workspacePath}"}`);
+    log.debug({ port: srv.port, workspacePath }, 'Step1 AddTrackedWorkspace');
     const addResult = await grpc.addTrackedWorkspace(srv.port, srv.csrf, workspacePath);
-    console.log(`📝 [NewConv] Step1 Response:`, JSON.stringify(addResult));
+    log.debug({ response: addResult }, 'Step1 Response');
 
     // Step 2: StartCascade
-    console.log(`📝 [NewConv] Step2 StartCascade → port ${srv.port}, workspaceUris=["${wsUri}"]`);
+    log.debug({ port: srv.port, wsUri }, 'Step2 StartCascade');
     const data = await grpc.startCascade(srv.port, srv.csrf, apiKey, wsUri);
-    console.log(`📝 [NewConv] Step2 Response:`, JSON.stringify(data));
+    log.debug({ cascadeId: data.cascadeId }, 'Step2 Response');
 
     // Step 3: UpdateConversationAnnotations + local tracking
     if (data.cascadeId) {
       const wsName = wsUri.split('/').pop() || 'conversation';
       addLocalConversation(data.cascadeId, wsUri, `New: ${wsName}`);
 
-      console.log(`📝 [NewConv] Step3 UpdateAnnotations → cascadeId=${data.cascadeId}`);
+      log.debug({ cascadeId: data.cascadeId }, 'Step3 UpdateAnnotations');
       const nowTs = new Date().toISOString();
       const annotResult = await grpc.updateConversationAnnotations(srv.port, srv.csrf, apiKey, data.cascadeId, {
         lastUserViewTime: nowTs,
         summary: `Antigravity Web: ${wsName} (${new Date().toLocaleTimeString()})`
-      }).catch((e: any) => { console.error(`📝 [NewConv] Step3 Error:`, e.message); return null; });
-      console.log(`📝 [NewConv] Step3 Response:`, JSON.stringify(annotResult));
+      }).catch((e: any) => { log.error({ err: e.message }, 'Step3 Error'); return null; });
+      log.debug({ response: annotResult }, 'Step3 Response');
 
       // Pre-register in ownerMap — survives refreshOwnerMap() clears for 60s
       preRegisterOwner(data.cascadeId, {
@@ -207,10 +209,10 @@ export async function POST(req: Request) {
         stepCount: 0,
       });
     }
-    console.log(`✅ [NewConv] ====== DONE ====== cascadeId=${data.cascadeId}`);
+    log.info({ cascadeId: data.cascadeId }, 'Conversation created successfully');
     return NextResponse.json(data);
   } catch (e: any) {
-    console.error(`❌ [NewConv] Error:`, e.message);
+    log.error({ err: e.message }, 'Conversation creation failed');
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

@@ -1,5 +1,8 @@
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
+import { createLogger } from '../logger';
+
+const log = createLogger('Discovery');
 
 export interface LanguageServerInfo {
   pid: number;
@@ -122,7 +125,7 @@ export function discoverLanguageServers(): LanguageServerInfo[] {
   } catch { /* ps failed */ }
 
   if (servers.length !== _cachedServers.length || servers.some((s, i) => s.port !== _cachedServers[i]?.port)) {
-    console.log(`🔎 [Discovery] Found ${servers.length} server(s): ${servers.map(s => `pid=${s.pid} port=${s.port} ws="${s.workspace}"`).join(' | ')}`);
+    log.info({ count: servers.length, servers: servers.map(s => `pid=${s.pid} port=${s.port} ws="${s.workspace}"`).join(' | ') }, 'Servers discovered');
   }
 
   _cachedServers = servers;
@@ -141,7 +144,7 @@ export function getLanguageServer(workspacePath?: string): LanguageServerInfo | 
     // Exact match first
     const exact = servers.find(s => s.workspace === workspacePath);
     if (exact) {
-      console.log(`🔎 [getLanguageServer] Exact match for "${workspacePath}" → port ${exact.port}`);
+      log.debug({ workspacePath, port: exact.port }, 'Exact workspace match');
       return exact;
     }
 
@@ -150,11 +153,11 @@ export function getLanguageServer(workspacePath?: string): LanguageServerInfo | 
       s.workspace?.includes(workspacePath) || workspacePath.includes(s.workspace || '\0')
     );
     if (partial) {
-      console.log(`🔎 [getLanguageServer] Partial match for "${workspacePath}" → port ${partial.port} (server ws: "${partial.workspace}")`);
+      log.debug({ workspacePath, port: partial.port, serverWs: partial.workspace }, 'Partial workspace match');
       return partial;
     }
 
-    console.log(`🔎 [getLanguageServer] No match for "${workspacePath}", falling back to servers[0] (port ${servers[0].port}, ws: "${servers[0].workspace}")`);
+    log.debug({ workspacePath, fallbackPort: servers[0].port, fallbackWs: servers[0].workspace }, 'No workspace match, using fallback');
   }
 
   return servers[0];
