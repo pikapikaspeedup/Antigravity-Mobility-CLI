@@ -10,6 +10,8 @@
   <img src="https://img.shields.io/badge/i18n-中文_|_EN-green?style=for-the-badge" alt="i18n" />
 </p>
 
+- 本项目首发 Linux.do **[linuxdo（linux.do）](https://linux.do/)** 共建更好社区
+
 **[English Documentation →](README_EN.md)**
 
 <p align="center">
