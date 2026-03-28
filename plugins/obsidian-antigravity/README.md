@@ -28,7 +28,6 @@ Antigravity 用两个引擎解决这个问题：
 | **Atom Upgrade** | 当 Vault 中其他笔记包含与某个原子相关的新信息时，AI 自动提取并追加到原子末尾 | L1 |
 | **Vault-aware Chat** | 在 Obsidian 内与 AI 对话。与普通聊天不同，AI 会自动搜索你的 Vault，找到相关笔记作为参考来回答——基于你自己的知识来回答你的问题 | L1 |
 | **浮动工具栏** | 选中文字后弹出工具栏：一键翻译(10语种)、润色(7种模式)、摘要、续写、解释。支持自定义 Prompt 模板，用变量 `{{selection}}`/`{{input:提示}}` 打造个人工作流 | L1 |
-| **多语言翻译 View** | 一键切换当前笔记的语言视图（中↔英等7语种）——点击 🌐 图标即进入翻译阅读模式，带完整工具栏（切换语言/重译/复制/导出为 .en.md）。块级增量翻译 & IndexedDB 缓存，修改后只重译变化段落 | L1 |
 
 ## 安装
 
@@ -41,8 +40,8 @@ Antigravity 用两个引擎解决这个问题：
 ```bash
 cd plugins/obsidian-antigravity
 npm install
-npm run build          # → main.js (264kb)
-npm test               # → 78 tests, <1s
+npm run build          # → main.js (217kb)
+npm test               # → 60 tests, <1s
 ```
 
 ## 快速上手
@@ -69,17 +68,6 @@ npm test               # → 78 tests, <1s
 2. 原文自动转为"组合笔记"（用 `![[原子名]]` 嵌入引用各原子），每个原子可以被其他文章独立引用
 3. `Vault Health Report` 持续追踪：发现内容重叠可合并(Merge)、发现知识空白可补充、发现断链可修复
 
-### 4. 多语言翻译
-
-跨国工作者的核心能力——在 Reading View 内无缝切换笔记语言：
-
-1. 点击左侧 🌐 Ribbon 图标 → 自动切入翻译 Reading View
-2. 工具栏提供：**切换语言** ↔️ | **重新翻译** 🔄 | **复制到剪贴板** 📋 | **导出为 `.en.md`** 📄 | **关闭** ✕
-3. 切换到其他笔记时**自动跟随翻译**（无需反复点击）
-4. 修改笔记后重新打开翻译视图，只有**修改过的段落**会重新翻译（块级增量更新）
-
-> 💡 翻译缓存存储在 IndexedDB 中，同一笔记的翻译只需一次 API 调用。内容变化后通过哈希对比实现精确的块级增量翻译。
-
 ## 命令列表
 
 | 命令 | 快捷说明 |
@@ -94,10 +82,6 @@ npm test               # → 78 tests, <1s
 | `Export Debug Logs` | 导出日志到剪贴板 |
 | `Clear Debug Logs` | 清空日志 |
 | `Manage Prompt Templates` | 管理 Prompt 模板 |
-| `Toggle Translation View` | 🌐 当前笔记翻译阅读模式开关 |
-| `Translate Current Note` | 翻译当前笔记 |
-| `Toggle Translation Language` | 快速切换中↔英 |
-| `Open Translation Panel` | 打开翻译侧边栏面板 |
 
 ## 技术概览
 
@@ -105,7 +89,7 @@ npm test               # → 78 tests, <1s
 - **存储**: IndexedDB 优先（缓存连接，性能更好），不支持时自动回退到 JSON 文件存储
 - **AI**: GitHub Copilot API — gpt-4o 用于分析（提取实体/主题/原子操作），text-embedding-3-small 用于向量嵌入（1536 维，计算语义相似度）
 - **限流**: 所有 AI 请求间隔 ≥800ms，单篇笔记内容截断至 3000 字，避免 API 过载
-- **测试**: vitest 78 tests，覆盖引擎核心(19)、API 解析(6)、断链修复(8)、原子操作(5)、翻译引擎(18)、完整生命周期集成(22)
+- **测试**: vitest 60 tests，覆盖引擎核心(19)、API 解析(6)、断链修复(8)、原子操作(5)、完整生命周期集成(22)
 
 ## 许可
 

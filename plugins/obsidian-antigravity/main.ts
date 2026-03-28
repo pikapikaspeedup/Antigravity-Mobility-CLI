@@ -23,9 +23,6 @@ import { AtomizationManager, SplitConfirmModal } from './atomization-manager';
 import { showVaultDashboard } from './vault-dashboard-ui';
 import { showPromptManager } from './prompt-manager-ui';
 import { FloatingToolbarManager } from './floating-toolbar';
-import { TranslationEngine, type SupportedLang, LANG_LABELS } from './translation-engine';
-import { TranslationView, VIEW_TYPE_TRANSLATION } from './translation-view';
-import { TranslationReader } from './translation-reader';
 
 export default class AntigravityPlugin extends Plugin {
   settings!: AntigravitySettings;
@@ -47,10 +44,6 @@ export default class AntigravityPlugin extends Plugin {
   private steward: KnowledgeSteward | null = null;
   // Atomization manager (extracted module)
   private atomizationManager!: AtomizationManager;
-  // Translation engine
-  translationEngine!: TranslationEngine;
-  // Translation reader (Reading View overlay)
-  private translationReader!: TranslationReader;
 
   async onload() {
     await this.loadSettings();
@@ -117,7 +110,7 @@ export default class AntigravityPlugin extends Plugin {
       };
       // Wire upgrade execution
       view.onExecuteUpgrade = (filePath: string) => {
-        (this.app as any).commands.executeCommandById('obsidian-antigravity:atom-upgrade');
+        (this.app as any).commands.executeCommandById('antigravity:atom-upgrade');
       };
       // Wire AI enrich for single note
       view.onEnrichNote = async (filePath: string) => {
@@ -168,43 +161,6 @@ export default class AntigravityPlugin extends Plugin {
       this.manifest.id,
     );
 
-    // Initialize translation engine
-    this.translationEngine = new TranslationEngine(
-      this.app,
-      () => this.settings.copilotCredentials ?? null,
-      (c) => { this.settings.copilotCredentials = c; this.saveSettings(); },
-    );
-
-    // Register the translation view
-    this.registerView(VIEW_TYPE_TRANSLATION, (leaf) => {
-      const lang = (this.settings.translationTargetLang || 'en') as SupportedLang;
-      const view = new TranslationView(leaf, this.translationEngine, lang);
-      view.onTargetLangChanged = (newLang) => {
-        this.settings.translationTargetLang = newLang;
-        this.saveSettings();
-      };
-      return view;
-    });
-
-    // Initialize translation reader (Reading View overlay + toolbar)
-    this.translationReader = new TranslationReader(
-      this.app,
-      this.translationEngine,
-      () => (this.settings.translationTargetLang || 'en') as SupportedLang,
-      (lang: SupportedLang) => {
-        this.settings.translationTargetLang = lang;
-        this.saveSettings();
-      },
-      (active) => {
-        // Update ribbon icon visual state
-        const ribbonEl = document.querySelector('.side-dock-ribbon-action[aria-label="Toggle Translation View"]');
-        if (ribbonEl) {
-          ribbonEl.classList.toggle('ag-translation-view-action-active', active);
-        }
-      },
-    );
-    this.addChild(this.translationReader);
-
     // Initialize knowledge engine after layout is ready
     this.app.workspace.onLayoutReady(async () => {
       await this.knowledgeEngine.initialize(this.settings.excludeFolders);
@@ -240,18 +196,12 @@ export default class AntigravityPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.vault.on('delete', (file) => {
-        if (file instanceof TFile) {
-          this.knowledgeEngine.onFileDeleted(file.path);
-          this.translationEngine.onFileDeleted(file.path);
-        }
+        if (file instanceof TFile) this.knowledgeEngine.onFileDeleted(file.path);
       })
     );
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
-        if (file instanceof TFile) {
-          this.knowledgeEngine.onFileRenamed(oldPath, file.path);
-          this.translationEngine.onFileRenamed(oldPath, file.path);
-        }
+        if (file instanceof TFile) this.knowledgeEngine.onFileRenamed(oldPath, file.path);
       })
     );
 
@@ -273,8 +223,6 @@ export default class AntigravityPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
         this.atomizationManager.onActiveLeafChangeForAtomization();
-        // Update translation state on leaf change (non-blocking, follows to new file)
-        this.translationReader.onActiveLeafChange().catch(() => {/* ignore */});
       })
     );
 
@@ -286,15 +234,6 @@ export default class AntigravityPlugin extends Plugin {
     // Add ribbon icon to open related notes
     this.addRibbonIcon('link', 'Open Related Notes', () => {
       this.activateRelatedNotesView();
-    });
-
-    // Add ribbon icon: toggle translation in Reading View
-    this.addRibbonIcon('languages', 'Toggle Translation View', async () => {
-      if (!this.settings.copilotCredentials) {
-        new Notice('Copilot login required for translation');
-        return;
-      }
-      await this.translationReader.toggle();
     });
 
     // Add command: open chat
@@ -309,79 +248,6 @@ export default class AntigravityPlugin extends Plugin {
       id: 'open-related-notes',
       name: 'Open Related Notes Panel',
       callback: () => this.activateRelatedNotesView(),
-    });
-
-    // Add command: open translation panel
-    this.addCommand({
-      id: 'open-translation',
-      name: 'Open Translation Panel',
-      callback: () => this.activateTranslationView(),
-    });
-
-    // Add command: translate current note
-    this.addCommand({
-      id: 'translate-current-note',
-      name: 'Translate Current Note',
-      callback: async () => {
-        if (!this.settings.copilotCredentials) {
-          new Notice('Copilot login required for translation');
-          return;
-        }
-        const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension !== 'md') {
-          new Notice('No active markdown file');
-          return;
-        }
-        const lang = (this.settings.translationTargetLang || 'en') as SupportedLang;
-        new Notice(`Translating to ${LANG_LABELS[lang]}...`);
-        const content = await this.app.vault.cachedRead(file);
-        const result = await this.translationEngine.translateFile(file.path, content, lang);
-        if (result) {
-          new Notice(`Translation complete → ${LANG_LABELS[lang]}`);
-          await this.activateTranslationView();
-        } else {
-          new Notice('Translation failed');
-        }
-      },
-    });
-
-    // Add command: toggle translation language (quick switch zh↔en)
-    this.addCommand({
-      id: 'toggle-translation-lang',
-      name: 'Toggle Translation Language (ZH ↔ EN)',
-      callback: () => {
-        const current = this.settings.translationTargetLang;
-        const next: SupportedLang = current === 'en' ? 'zh' : 'en';
-        this.settings.translationTargetLang = next;
-        this.saveSettings();
-        // Update existing translation view
-        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TRANSLATION);
-        for (const leaf of leaves) {
-          if (leaf.view instanceof TranslationView) {
-            (leaf.view as TranslationView).setTargetLang(next);
-          }
-        }
-        // Refresh reading view overlay if active
-        if (this.translationReader.isActive()) {
-          this.translationReader.refresh();
-        }
-        new Notice(`Translation target: ${LANG_LABELS[next]}`);
-      },
-    });
-
-    // Add command: toggle translation in Reading View (in-place overlay)
-    this.addCommand({
-      id: 'toggle-translation-reader',
-      name: 'Toggle Translation in Reading View',
-      callback: async () => {
-        if (!this.settings.copilotCredentials) {
-          new Notice('Copilot login required for translation');
-          return;
-        }
-        await this.translationReader.toggle();
-        const state = this.translationReader.isActive() ? 'ON' : 'OFF';
-        new Notice(`Reading View translation: ${state}`);
-      },
     });
 
     // Add command: rebuild knowledge index
@@ -469,7 +335,6 @@ export default class AntigravityPlugin extends Plugin {
         if (!activeFile) { new Notice('No active file'); return; }
         // Guard: atom notes should not be split further
         const profile = this.knowledgeEngine.getProfile(activeFile.path);
-        logger.info('AtomSplit', 'Checking file', { path: activeFile.path, role: profile?.role ?? 'none' });
         if (profile && profile.role === 'atom') {
           new Notice('This note is already an atom — it cannot be split further');
           return;
@@ -479,31 +344,25 @@ export default class AntigravityPlugin extends Plugin {
           return;
         }
         new Notice('Analyzing note for split opportunities...');
-        try {
-          const plan = await analyzeSplit(
-            this.app, activeFile.path,
-            () => this.settings.copilotCredentials ?? null,
-            (c) => { this.settings.copilotCredentials = c; this.saveSettings(); },
-          );
-          logger.info('AtomSplit', 'Analysis result', { atoms: plan?.atoms?.length ?? 0 });
-          if (!plan || plan.atoms.length === 0) {
-            new Notice('No split opportunities found');
+        const plan = await analyzeSplit(
+          this.app, activeFile.path,
+          () => this.settings.copilotCredentials ?? null,
+          (c) => { this.settings.copilotCredentials = c; this.saveSettings(); },
+        );
+        if (!plan || plan.atoms.length === 0) {
+          new Notice('No split opportunities found');
+          return;
+        }
+        // Show confirmation modal
+        new SplitConfirmModal(this.app, activeFile.path, plan, async (confirmed) => {
+          if (!confirmed) {
+            new Notice('Split cancelled');
             return;
           }
-          // Show confirmation modal
-          new SplitConfirmModal(this.app, activeFile.path, plan, async (confirmed) => {
-            if (!confirmed) {
-              new Notice('Split cancelled');
-              return;
-            }
-            new Notice(`Splitting into ${plan.atoms.length} atoms...`);
-            const created = await executeSplit(this.app, activeFile.path, plan);
-            new Notice(`Created ${created.length} atom note(s)`);
-          }).open();
-        } catch (e) {
-          logger.error('AtomSplit', 'Analysis failed', { error: (e as Error).message, stack: (e as Error).stack });
-          new Notice('Atom split failed: ' + (e as Error).message);
-        }
+          new Notice(`Splitting into ${plan.atoms.length} atoms...`);
+          const created = await executeSplit(this.app, activeFile.path, plan);
+          new Notice(`Created ${created.length} atom note(s)`);
+        }).open();
       },
     });
 
@@ -660,7 +519,7 @@ export default class AntigravityPlugin extends Plugin {
                 .setIcon('scissors')
                 .onClick(() => {
                   this.app.workspace.getLeaf(false).openFile(file).then(() => {
-                    (this.app as any).commands.executeCommandById('obsidian-antigravity:atom-split');
+                    (this.app as any).commands.executeCommandById('antigravity:atom-split');
                   });
                 }),
             );
@@ -674,13 +533,6 @@ export default class AntigravityPlugin extends Plugin {
       const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
       if (leaves.length === 0) {
         this.activateView();
-      }
-      // Auto-open translation panel if enabled
-      if (this.settings.translationAutoOpen) {
-        const tLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TRANSLATION);
-        if (tLeaves.length === 0) {
-          this.activateTranslationView();
-        }
       }
     });
 
@@ -843,6 +695,15 @@ export default class AntigravityPlugin extends Plugin {
     }
   }
 
+  /** Open the Prompt Manager modal (used by ChatView) */
+  showPromptManager() {
+    showPromptManager(this.app, this.settings, () => this.saveSettings());
+  }
+
+  /** Resolve prompt template variables (used by ChatView) */
+  async resolvePromptVariables(prompt: string, selection: string): Promise<string | null> {
+    return this.floatingToolbarManager.resolvePromptVariables(prompt, selection);
+  }
 
   async activateView() {
     const { workspace } = this.app;
@@ -906,26 +767,6 @@ export default class AntigravityPlugin extends Plugin {
       if (view instanceof VaultHealthView) {
         view.runAnalysis();
       }
-    }
-  }
-
-  async activateTranslationView() {
-    const { workspace } = this.app;
-
-    let leaf: WorkspaceLeaf | null = null;
-    const leaves = workspace.getLeavesOfType(VIEW_TYPE_TRANSLATION);
-
-    if (leaves.length > 0) {
-      leaf = leaves[0];
-    } else {
-      leaf = workspace.getRightLeaf(false);
-      if (leaf) {
-        await leaf.setViewState({ type: VIEW_TYPE_TRANSLATION, active: true });
-      }
-    }
-
-    if (leaf) {
-      workspace.revealLeaf(leaf);
     }
   }
 

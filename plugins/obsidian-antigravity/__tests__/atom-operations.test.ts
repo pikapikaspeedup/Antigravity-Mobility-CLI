@@ -37,8 +37,6 @@ function createMockApp(existingFiles: Map<string, string> = new Map()) {
         files.set(newPath, '');
         tfiles.set(newPath, file);
       }),
-      configDir: '.obsidian',
-      adapter: { write: vi.fn(async () => {}) },
     },
   } as any;
 }
@@ -57,7 +55,7 @@ describe('executeSplit', () => {
     };
 
     const created = await executeSplit(app, 'notes/big-note.md', plan);
-    expect(created).toEqual(['notes/big-note/Atom One.md', 'notes/big-note/Atom Two.md']);
+    expect(created).toEqual(['notes/Atom One.md', 'notes/Atom Two.md']);
     expect(app.vault.create).toHaveBeenCalledTimes(2);
 
     // Check atom content has frontmatter
@@ -69,7 +67,7 @@ describe('executeSplit', () => {
   it('skips existing files without error', async () => {
     const app = createMockApp(new Map([
       ['notes/source.md', 'Content'],
-      ['notes/source/Existing.md', 'Already here'],
+      ['notes/Existing.md', 'Already here'],
     ]));
 
     const plan: SplitPlan = {

@@ -147,53 +147,8 @@ export class RelatedNotesView extends ItemView {
       const emptyIcon = emptyEl.createDiv({ cls: 'ag-rel-empty-icon' });
       setIcon(emptyIcon, 'search');
       emptyEl.createDiv({ cls: 'ag-rel-no-results-text', text: 'No related notes found' });
-
-      // AI Actions panel for empty state
-      const actionsEl = emptyEl.createDiv({ cls: 'ag-rel-ai-actions' });
-      actionsEl.createDiv({ cls: 'ag-rel-ai-actions-title', text: 'AI Actions' });
-
-      // AI Enrich
-      const enrichBtn = actionsEl.createDiv({ cls: 'ag-rel-ai-action-btn' });
-      const enrichIcon = enrichBtn.createSpan({ cls: 'ag-rel-ai-action-icon' });
-      setIcon(enrichIcon, 'sparkles');
-      enrichBtn.createSpan({ text: 'AI Enrich Notes' });
-      enrichBtn.createDiv({ cls: 'ag-rel-ai-action-desc', text: 'Use AI to discover hidden connections and generate tags, summaries, and links' });
-      enrichBtn.addEventListener('click', () => {
-        (this.app as any).commands.executeCommandById('obsidian-antigravity:enrich-notes-ai');
-      });
-
-      // AI Atom Split
-      const splitBtn = actionsEl.createDiv({ cls: 'ag-rel-ai-action-btn' });
-      const splitIcon = splitBtn.createSpan({ cls: 'ag-rel-ai-action-icon' });
-      setIcon(splitIcon, 'scissors');
-      splitBtn.createSpan({ text: 'AI Atom Split' });
-      splitBtn.createDiv({ cls: 'ag-rel-ai-action-desc', text: 'Split this note into smaller atomic knowledge notes' });
-      splitBtn.addEventListener('click', () => {
-        (this.app as any).commands.executeCommandById('obsidian-antigravity:atom-split');
-      });
-
-      // Translate
-      const translateBtn = actionsEl.createDiv({ cls: 'ag-rel-ai-action-btn' });
-      const translateIcon = translateBtn.createSpan({ cls: 'ag-rel-ai-action-icon' });
-      setIcon(translateIcon, 'languages');
-      translateBtn.createSpan({ text: 'Translate Note' });
-      translateBtn.createDiv({ cls: 'ag-rel-ai-action-desc', text: 'View this note in another language' });
-      translateBtn.addEventListener('click', () => {
-        (this.app as any).commands.executeCommandById('obsidian-antigravity:toggle-translation-reader');
-      });
-
-      // Vault Health
-      const healthBtn = actionsEl.createDiv({ cls: 'ag-rel-ai-action-btn' });
-      const healthIcon = healthBtn.createSpan({ cls: 'ag-rel-ai-action-icon' });
-      setIcon(healthIcon, 'activity');
-      healthBtn.createSpan({ text: 'Vault Health Check' });
-      healthBtn.createDiv({ cls: 'ag-rel-ai-action-desc', text: 'Analyze vault structure, orphans, and knowledge gaps' });
-      healthBtn.addEventListener('click', () => {
-        (this.app as any).commands.executeCommandById('obsidian-antigravity:vault-health');
-      });
-
       const hintEl = emptyEl.createDiv({ cls: 'ag-rel-hint' });
-      hintEl.textContent = 'You can also add [[links]] and #tags to create connections manually.';
+      hintEl.textContent = 'Try adding [[links]], #tags, or more content. Run "AI Enrich Notes" for deeper analysis.';
       this.renderStats(stats);
       return;
     }

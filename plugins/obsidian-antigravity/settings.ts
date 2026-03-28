@@ -78,9 +78,6 @@ export interface AntigravitySettings {
   // Atomization
   atomizationEnabled: boolean;
   atomizationSettleMinutes: number;
-  // Translation
-  translationTargetLang: string;  // SupportedLang code, e.g. 'en', 'zh'
-  translationAutoOpen: boolean;   // Auto-open translation panel on startup
   // Onboarding
   onboardingStep: number; // 0=welcome, 1=type intro, 99=done
 }
@@ -106,8 +103,6 @@ export const DEFAULT_SETTINGS: AntigravitySettings = {
   quickActionModel: 'gpt-4o',
   atomizationEnabled: true,
   atomizationSettleMinutes: 5,
-  translationTargetLang: 'en',
-  translationAutoOpen: false,
   onboardingStep: 0,
   promptTemplates: [
     // ── Translate (single template with list variable) ──
@@ -390,40 +385,6 @@ export class AntigravitySettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             }
           }),
-      );
-
-    // ══════════════════════════════════════════════
-    // ── Translation ──
-    // ══════════════════════════════════════════════
-    containerEl.createEl('h3', { text: 'Translation (Multilingual)' });
-
-    new Setting(containerEl)
-      .setName('Default Target Language')
-      .setDesc('The default language for the Translation panel. You can also switch languages inside the panel.')
-      .addDropdown((dd) =>
-        dd
-          .addOption('en', 'English')
-          .addOption('zh', '中文')
-          .addOption('ja', '日本語')
-          .addOption('ko', '한국어')
-          .addOption('es', 'Español')
-          .addOption('fr', 'Français')
-          .addOption('de', 'Deutsch')
-          .setValue(this.plugin.settings.translationTargetLang)
-          .onChange(async (value) => {
-            this.plugin.settings.translationTargetLang = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName('Auto-open Translation Panel')
-      .setDesc('Automatically open the translation panel when the plugin loads.')
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.translationAutoOpen).onChange(async (v) => {
-          this.plugin.settings.translationAutoOpen = v;
-          await this.plugin.saveSettings();
-        }),
       );
 
     // ══════════════════════════════════════════════
