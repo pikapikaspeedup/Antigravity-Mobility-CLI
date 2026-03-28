@@ -25,12 +25,19 @@ export interface Conversation {
 export interface Step {
   type: string;
   status?: string;
-  userInput?: { items?: Array<{ text?: string }> };
+  userInput?: { items?: Array<{ text?: string }>; media?: Array<{ mimeType?: string; inlineData?: string; uri?: string }> };
   plannerResponse?: { response?: string; modifiedResponse?: string };
   codeAction?: { actionSpec?: { createFile?: any; editFile?: any; deleteFile?: any } };
   errorMessage?: { message?: string };
   taskBoundary?: { taskName?: string; mode?: string; taskStatus?: string; taskSummary?: string };
-  notifyUser?: { notificationContent?: string; blockedOnUser?: boolean; reviewAbsoluteUris?: string[] };
+  notifyUser?: {
+    notificationContent?: string;
+    blockedOnUser?: boolean;
+    isBlocking?: boolean;
+    reviewAbsoluteUris?: string[];
+    pathsToReview?: string[];
+    shouldAutoProceed?: boolean;
+  };
   runCommand?: { command?: string; commandLine?: string; safeToAutoRun?: boolean };
   viewFile?: { absoluteUri?: string };
   grepSearch?: { query?: string; searchPattern?: string };
@@ -65,14 +72,31 @@ export interface ModelsResponse {
   clientModelConfigs?: ModelConfig[];
 }
 
+export interface SkillItem {
+  name: string;
+  description: string;
+}
+
+export interface WorkflowItem {
+  name: string;
+  description: string;
+}
+
+export interface FileItem {
+  name: string;
+  relativePath: string;
+  absolutePath?: string;
+}
+
 // ── Connection state ──
 
 export type WsConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export type WsStateListener = (state: WsConnectionState, detail?: string) => void;
 
-const WS_MAX_RETRIES = 5;
-const WS_RETRY_INTERVAL_MS = 3000;
+const WS_MAX_RETRIES = 10;
+const WS_BASE_RETRY_MS = 1000;
+const WS_MAX_RETRY_MS = 30_000;
 
 export class GatewayClient {
   private baseUrl: string;
@@ -170,13 +194,13 @@ export class GatewayClient {
     return json || { steps: [] };
   }
 
-  async sendMessage(cascadeId: string, text: string, agenticMode = true, model?: string): Promise<any> {
+  async sendMessage(cascadeId: string, text: string, agenticMode = true, model?: string, attachments?: { media?: { mimeType: string; inlineData: string }[] }): Promise<any> {
     return this.safeRequest(
       {
         url: `${this.baseUrl}/api/conversations/${cascadeId}/send`,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, agenticMode, model }),
+        body: JSON.stringify({ text, agenticMode, model, attachments }),
       },
       'sendMessage',
     );
@@ -287,13 +311,18 @@ export class GatewayClient {
       return;
     }
 
-    logger.info(LOG_SRC, `WS retry ${this.wsRetryCount}/${WS_MAX_RETRIES} in ${WS_RETRY_INTERVAL_MS}ms`);
+    // Exponential backoff with jitter: base * 2^(attempt-1) + random jitter
+    const backoff = Math.min(WS_BASE_RETRY_MS * Math.pow(2, this.wsRetryCount - 1), WS_MAX_RETRY_MS);
+    const jitter = Math.round(Math.random() * backoff * 0.3);
+    const delayMs = backoff + jitter;
+
+    logger.info(LOG_SRC, `WS retry ${this.wsRetryCount}/${WS_MAX_RETRIES} in ${delayMs}ms`);
     this.setWsState('reconnecting', `attempt ${this.wsRetryCount}/${WS_MAX_RETRIES}`);
 
     this.wsRetryTimer = setTimeout(() => {
       this.wsRetryTimer = null;
       this.connectWs();
-    }, WS_RETRY_INTERVAL_MS);
+    }, delayMs);
   }
 
   /** Reset retry counter and attempt reconnect, typically called by user action. */
@@ -333,5 +362,43 @@ export class GatewayClient {
   unsubscribe(cascadeId: string) {
     this.wsListeners.delete(cascadeId);
     logger.debug(LOG_SRC, `Unsubscribed from ${cascadeId.slice(0, 8)}`);
+  }
+
+  // ── Skills / Workflows / File Search ──
+
+  async getSkills(): Promise<SkillItem[]> {
+    const json = await this.safeRequest(
+      { url: `${this.baseUrl}/api/skills` },
+      'getSkills',
+    );
+    return Array.isArray(json) ? json : [];
+  }
+
+  async getWorkflows(): Promise<WorkflowItem[]> {
+    const json = await this.safeRequest(
+      { url: `${this.baseUrl}/api/workflows` },
+      'getWorkflows',
+    );
+    return Array.isArray(json) ? json : [];
+  }
+
+  async getConversationFiles(cascadeId: string, query: string): Promise<FileItem[]> {
+    const json = await this.safeRequest(
+      { url: `${this.baseUrl}/api/conversations/${cascadeId}/files?q=${encodeURIComponent(query)}` },
+      `getFiles(${query.slice(0, 20)})`,
+    );
+    return json?.files || [];
+  }
+
+  async proceedArtifact(cascadeId: string, artifactUri: string, model?: string): Promise<any> {
+    return this.safeRequest(
+      {
+        url: `${this.baseUrl}/api/conversations/${cascadeId}/proceed`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artifactUri, model }),
+      },
+      'proceedArtifact',
+    );
   }
 }

@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "version": "0.3.0",
+  "summary": "Multilingual Translation System + Related Notes AI Actions + Atom Split fix",
+  "highlights": [
+    "Block-level incremental translation engine with IndexedDB cache",
+    "Reading View translation overlay with toolbar (copy/export/retranslate/switch lang)",
+    "Session-based concurrency control for safe file switching during translation",
+    "Follow mode: auto-translate on file navigation",
+    "Related Notes empty-state now shows AI quick actions",
+    "Fixed executeCommandById prefix bug for Atom Split/Upgrade context menu"
+  ],
+  "changedFiles": [
+    "plugins/obsidian-antigravity/translation-engine.ts",
+    "plugins/obsidian-antigravity/translation-reader.ts",
+    "plugins/obsidian-antigravity/translation-view.ts",
+    "plugins/obsidian-antigravity/main.ts",
+    "plugins/obsidian-antigravity/settings.ts",
+    "plugins/obsidian-antigravity/styles.css",
+    "plugins/obsidian-antigravity/related-notes-view.ts",
+    "plugins/obsidian-antigravity/__tests__/translation-engine.test.ts",
+    "plugins/obsidian-antigravity/__tests__/atom-operations.test.ts",
+    "plugins/obsidian-antigravity/README.md"
+  ],
+  "testResults": {
+    "total": 78,
+    "passed": 78,
+    "failed": 0,
+    "suites": 6
+  }
+}

@@ -5,7 +5,9 @@
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production"
+    "build": "node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "Antigravity",
@@ -15,6 +17,7 @@
     "builtin-modules": "^3.3.0",
     "esbuild": "0.17.3",
     "obsidian": "latest",
-    "typescript": "5.1.6"
+    "typescript": "5.1.6",
+    "vitest": "^3.2.4"
   }
 }

@@ -1,0 +1,14 @@
+{
+  "workPackages": [
+    {
+      "id": "wp-1",
+      "name": "Smoke Branch 1",
+      "goal": "Create a minimal branch result for smoke branch 1."
+    },
+    {
+      "id": "wp-2",
+      "name": "Smoke Branch 2",
+      "goal": "Create a minimal branch result for smoke branch 2."
+    }
+  ]
+}
