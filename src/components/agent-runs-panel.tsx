@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useI18n } from '@/components/locale-provider';
-import type { AgentRun, ModelConfig } from '@/lib/types';
+import type { AgentRun, HubProject, ModelConfig } from '@/lib/types';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Bot, XCircle, Clock, CheckCircle2, AlertCircle, Ban, Loader2, ChevronDown, ChevronUp, Send, RefreshCw, Sparkles, Zap, RotateCw } from 'lucide-react';
@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { getAgentRunDuration, getAgentRunTimeAgo, getAgentRunWorkspaceName, isAgentRunActive } from '@/lib/agent-run-utils';
 
 interface AgentRunsPanelProps {
-  workspaces: { uri: string; name: string; running: boolean }[];
   currentModel: string;
   models?: ModelConfig[];
   currentModelLabel?: string;
@@ -346,7 +345,6 @@ function RunItem({
 // ---------------------------------------------------------------------------
 
 export default function AgentRunsPanel({
-  workspaces,
   currentModel,
   models,
   currentModelLabel,
@@ -357,7 +355,6 @@ export default function AgentRunsPanel({
   const { t, locale } = useI18n();
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [prompt, setPrompt] = useState('');
-  const [selectedWs, setSelectedWs] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('coding-basic');
   const [selectedSourceRunId, setSelectedSourceRunId] = useState('');
   const [approvedProductRuns, setApprovedProductRuns] = useState<AgentRun[]>([]);
@@ -365,7 +362,18 @@ export default function AgentRunsPanel({
   const [selectedExplicitModel, setSelectedExplicitModel] = useState('');
   const [dispatching, setDispatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hubProjects, setHubProjects] = useState<HubProject[]>([]);
+  const [selectedHubProjectId, setSelectedHubProjectId] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    api.hubProjects().then(projects => {
+      setHubProjects(projects || []);
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('antigravity_selected_project') : '';
+      const next = (saved && projects.some(p => p.id === saved)) ? saved : (projects[0]?.id || '');
+      if (next) setSelectedHubProjectId(next);
+    }).catch(() => {});
+  }, []);
 
   // Poll runs
   const loadRuns = useCallback(async () => {
@@ -389,17 +397,13 @@ export default function AgentRunsPanel({
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [loadRuns, showRunsList]);
-  const runningWs = workspaces.filter(w => w.running);
-  const preferredWorkspace = runningWs[0]?.uri || workspaces[0]?.uri || '';
-  const effectiveSelectedWs = workspaces.some(w => w.uri === selectedWs) ? selectedWs : preferredWorkspace;
-
   // Fetch approved source runs when architecture-advisory or autonomous-dev-pilot is selected
   useEffect(() => {
     if (selectedGroup === 'architecture-advisory') {
       api.agentRunsByFilter({ groupId: 'product-spec', reviewOutcome: 'approved' })
         .then(runs => {
           const validRuns = runs.filter(r =>
-            r.resultEnvelope && r.artifactManifestPath && r.workspace === effectiveSelectedWs
+            r.resultEnvelope && r.artifactManifestPath
           );
           setApprovedProductRuns(validRuns);
           if (validRuns.length > 0 && !selectedSourceRunId) {
@@ -411,7 +415,7 @@ export default function AgentRunsPanel({
       api.agentRunsByFilter({ groupId: 'architecture-advisory', reviewOutcome: 'approved' })
         .then(runs => {
           const validRuns = runs.filter(r =>
-            r.resultEnvelope && r.artifactManifestPath && r.workspace === effectiveSelectedWs
+            r.resultEnvelope && r.artifactManifestPath
           );
           setApprovedProductRuns(validRuns);
           if (validRuns.length > 0 && !selectedSourceRunId) {
@@ -423,10 +427,10 @@ export default function AgentRunsPanel({
       setApprovedProductRuns([]);
       setSelectedSourceRunId('');
     }
-  }, [selectedGroup, effectiveSelectedWs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedGroup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDispatch = async () => {
-    if (!prompt.trim() || !effectiveSelectedWs) return;
+    if (!prompt.trim()) return;
     setDispatching(true);
     setError(null);
     try {
@@ -452,7 +456,7 @@ export default function AgentRunsPanel({
         }
         const response = await api.dispatchRun({
           groupId: 'architecture-advisory',
-          workspace: effectiveSelectedWs,
+          hubProjectId: selectedHubProjectId || undefined,
           prompt: prompt.trim(),
           model: modelToSend,
           taskEnvelope: {
@@ -474,7 +478,7 @@ export default function AgentRunsPanel({
         }
         const response = await api.dispatchRun({
           groupId: 'autonomous-dev-pilot',
-          workspace: effectiveSelectedWs,
+          hubProjectId: selectedHubProjectId || undefined,
           prompt: prompt.trim(),
           model: modelToSend,
           sourceRunIds: [selectedSourceRunId],
@@ -485,7 +489,7 @@ export default function AgentRunsPanel({
       } else {
         const response = await api.dispatchRun({
           groupId: selectedGroup,
-          workspace: effectiveSelectedWs,
+          hubProjectId: selectedHubProjectId || undefined,
           prompt: prompt.trim(),
           model: modelToSend,
         });
@@ -521,8 +525,6 @@ export default function AgentRunsPanel({
 
 
   const isFullLayout = layout === 'full';
-  const selectedWorkspace = workspaces.find(w => w.uri === effectiveSelectedWs) || runningWs[0] || null;
-  const selectedWorkspaceName = selectedWorkspace?.name || (effectiveSelectedWs ? getAgentRunWorkspaceName(effectiveSelectedWs) : t('sidebar.selectWorkspace'));
   const selectedExplicitModelLabel = models?.find(model => model.modelOrAlias?.model === selectedExplicitModel)?.label || t('composer.chooseModel');
   const modelModeLabel = modelMode === 'follow-header'
     ? (currentModelLabel || t('composer.autoSelect'))
@@ -554,11 +556,7 @@ export default function AgentRunsPanel({
                     <Badge variant="outline" className="max-w-full rounded-full border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-[color:var(--agent-text-soft)]">
                       <span className="truncate">{modelModeLabel}</span>
                     </Badge>
-                    {selectedWorkspaceName && (
-                      <Badge variant="outline" className="max-w-full rounded-full border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-[color:var(--agent-text-soft)]">
-                        <span className="truncate">{selectedWorkspaceName}</span>
-                      </Badge>
-                    )}
+
                   </div>
                 </div>
               </div>
@@ -567,37 +565,26 @@ export default function AgentRunsPanel({
         )}
 
         <div className={cn('space-y-3', isFullLayout && 'relative')}>
-          {runningWs.length === 0 && (
-            <div className={cn(
-              'rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-              isFullLayout ? 'rounded-2xl px-4 py-3 text-sm' : 'px-2 py-1.5 text-[11px]'
-            )}>
-              {t('sidebar.workspaceNotRunning')}
-            </div>
-          )}
-
           {isFullLayout ? (
             <div className="space-y-4">
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="space-y-2">
-                  <div className="agent-kicker">{t('agent.targetWorkspace')}</div>
-                <Select value={effectiveSelectedWs} onValueChange={(val) => val && setSelectedWs(val)}>
-                  <SelectTrigger className="h-12 rounded-2xl border-white/8 bg-white/[0.05] text-sm">
-                    <span className="truncate">{selectedWorkspaceName}</span>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {runningWs.map(w => (
-                      <SelectItem key={w.uri} value={w.uri} className="text-sm">
-                        <div className="flex items-center gap-1.5">
-                          <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                          {w.name}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  <div className="agent-kicker">{t('sidebar.selectProject')}</div>
+                  <Select value={selectedHubProjectId} onValueChange={(val) => val && setSelectedHubProjectId(val)}>
+                    <SelectTrigger className="h-12 rounded-2xl border-white/8 bg-white/[0.05] text-sm">
+                      <span className="truncate">
+                        {hubProjects.find(p => p.id === selectedHubProjectId)?.name || t('sidebar.selectProject')}
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {hubProjects.map(project => (
+                        <SelectItem key={project.id} value={project.id} className="text-sm">
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-
                 <div className="space-y-2">
                   <div className="agent-kicker">Group</div>
                   <Select value={selectedGroup} onValueChange={(val) => val && setSelectedGroup(val)}>
@@ -710,7 +697,7 @@ export default function AgentRunsPanel({
                 <Button
                   className="h-14 rounded-[18px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] px-6 text-sm font-semibold text-slate-950 shadow-[0_20px_48px_rgba(10,154,190,0.24)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_56px_rgba(10,154,190,0.3)] lg:min-w-[220px]"
                   onClick={handleDispatch}
-                  disabled={dispatching || !prompt.trim() || !effectiveSelectedWs || runningWs.length === 0}
+                  disabled={dispatching || !prompt.trim()}
                 >
                   {dispatching ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -723,22 +710,6 @@ export default function AgentRunsPanel({
             </div>
           ) : (
             <>
-              <Select value={effectiveSelectedWs} onValueChange={(val) => val && setSelectedWs(val)}>
-                <SelectTrigger className="h-8 text-[11px]">
-                  <SelectValue placeholder={t('sidebar.selectWorkspace')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {runningWs.map(w => (
-                    <SelectItem key={w.uri} value={w.uri} className="text-[11px]">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        {w.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
               <div className="flex flex-col gap-1.5">
                 <Select value={modelMode} onValueChange={(val: string | null) => { if (val) setModelMode(val as RunModelMode); }}>
                   <SelectTrigger className="h-8 text-[11px]">
@@ -822,7 +793,7 @@ export default function AgentRunsPanel({
               <Button
                 className="h-8 w-full text-xs"
                 onClick={handleDispatch}
-                disabled={dispatching || !prompt.trim() || !effectiveSelectedWs || runningWs.length === 0}
+                disabled={dispatching || !prompt.trim()}
               >
                 {dispatching ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

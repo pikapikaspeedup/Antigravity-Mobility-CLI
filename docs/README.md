@@ -4,6 +4,7 @@
 
 | 文档 | 说明 | 受众 |
 |------|------|------|
+| [antigravity-2.md](guide/antigravity-2.md) | Antigravity 2.0 使用指南：hub、Project 文件夹、账号风险 | 用户 |
 | [agent-user-guide.md](guide/agent-user-guide.md) | Multi-Agent 系统完整用户手册：Group、Pipeline、Workflow、产物体系 | 用户 |
 | [cli-guide.md](guide/cli-guide.md) | `ag` CLI 命令使用指南 | 用户 |
 | [gateway-api.md](guide/gateway-api.md) | Gateway REST + WebSocket API 完整参考（对话、项目、Run、环境接口）| 开发者 |

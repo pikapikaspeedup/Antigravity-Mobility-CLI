@@ -9,7 +9,7 @@
  */
 
 import {
-  discoverLanguageServers,
+  getLanguageServer,
   getApiKey,
   refreshOwnerMap,
   preRegisterOwner,
@@ -82,6 +82,7 @@ export interface DispatchRunInput {
   taskEnvelope?: TaskEnvelope;
   sourceRunIds?: string[];
   projectId?: string;
+  hubProjectId?: string;
   pipelineId?: string;
   pipelineStageIndex?: number;
 }
@@ -271,7 +272,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
   }
 
   // 3. V2.5: Source contract validation (replaces hardcoded product-spec check)
-  const workspacePath = input.workspace.replace(/^file:\/\//, '');
+  const workspacePath = (input.workspace || '').replace(/^file:\/\//, '');
   let resolvedSource: ResolvedSourceContext = { sourceRuns: [], inputArtifacts: [] };
 
   if (group.sourceContract) {
@@ -288,19 +289,13 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     resolvedSource = { sourceRuns: [], inputArtifacts };
   }
 
-  // 4. Find the server for this workspace
-  const servers = discoverLanguageServers();
-  const server = servers.find(
-    (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
-  );
+  // 4. Attach to the 2.0 hub
+  const server = getLanguageServer();
   if (!server) {
-    throw new Error(`No language_server found for workspace: ${input.workspace}`);
+    throw new Error('No Antigravity hub running');
   }
 
   const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error('No API key available');
-  }
 
   // 5. Build or synthesize TaskEnvelope
   const finalModel = input.model || group.defaultModel || 'MODEL_PLACEHOLDER_M26';
@@ -337,6 +332,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     taskEnvelope: envelope,
     sourceRunIds: allSourceRunIds.length > 0 ? allSourceRunIds : input.sourceRunIds,
     projectId: input.projectId,
+    hubProjectId: input.hubProjectId,
     pipelineId: input.pipelineId,
     pipelineStageIndex: input.pipelineStageIndex,
   });
@@ -408,16 +404,23 @@ async function createAndDispatchChild(
   // PITFALL #12: Must addTrackedWorkspace before startCascade so the language server
   // knows about this workspace's filesystem. Without this, tool calls like
   // LIST_DIRECTORY get CANCELED because the server can't access the files.
-  const workspacePath = wsUri.replace(/^file:\/\//, '');
-  log.info({ runId: shortRunId, roleId, port: server.port }, 'Starting child conversation');
-  try {
-    await grpc.addTrackedWorkspace(server.port, server.csrf, workspacePath);
-    log.debug({ runId: shortRunId, roleId, workspacePath: workspacePath.slice(-40) }, 'Workspace tracked');
-  } catch (e: any) {
-    log.warn({ runId: shortRunId, roleId, err: e.message }, 'AddTrackedWorkspace failed (may already be tracked)');
+  const run = getRun(runId);
+  const { getAgyProject, projectFolderUris } = await import('../bridge/agy-projects');
+  const hubProject = run?.hubProjectId ? getAgyProject(run.hubProjectId) : null;
+  const folderUris = hubProject ? projectFolderUris(hubProject) : (wsUri ? [wsUri] : []);
+  log.info({ runId: shortRunId, roleId, port: server.port, hubProjectId: hubProject?.id, folders: folderUris.length }, 'Starting child conversation');
+  for (const uri of folderUris) {
+    try {
+      await grpc.addTrackedWorkspace(server.port, server.csrf, uri.replace(/^file:\/\//, ''));
+    } catch (e: any) {
+      log.warn({ runId: shortRunId, roleId, err: e.message }, 'AddTrackedWorkspace failed (may already be tracked)');
+    }
   }
 
-  const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, wsUri);
+  const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, {
+    projectId: hubProject?.id,
+    workspaceUris: folderUris,
+  });
   const cascadeId = startResult?.cascadeId;
 
   if (!cascadeId) {
@@ -639,15 +642,10 @@ export async function interveneRun(
     const shortRunId = runId.slice(0, 8);
     const workspacePath = run.workspace.replace(/^file:\/\//, '');
 
-    // Find the language server
-    const servers = discoverLanguageServers();
-    const server = servers.find(
-      (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
-    );
-    if (!server) throw new Error(`No language_server found for workspace: ${run.workspace}`);
+    const server = getLanguageServer();
+    if (!server) throw new Error('No Antigravity hub running');
 
     const apiKey = getApiKey();
-    if (!apiKey) throw new Error('No API key available');
 
     // Find the last failed/completed role
     const roles = run.roles || [];
@@ -1005,19 +1003,12 @@ export async function processInterventionResult(
       // Re-enter the review loop from the next round
       const workspacePath = originalRun.workspace.replace(/^file:\/\//, '');
       const wsUri = originalRun.workspace.startsWith('file://') ? originalRun.workspace : `file://${originalRun.workspace}`;
-      const servers = discoverLanguageServers();
-      const server = servers.find(
-        (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
-      );
+      const server = getLanguageServer();
       if (!server) {
         updateRun(runId, { status: 'failed', lastError: 'Cannot resume review loop: no language server found' });
         return;
       }
       const apiKey = getApiKey();
-      if (!apiKey) {
-        updateRun(runId, { status: 'failed', lastError: 'Cannot resume review loop: no API key' });
-        return;
-      }
 
       const input: DispatchRunInput = {
         groupId: group.id,
@@ -1052,19 +1043,12 @@ export async function processInterventionResult(
 
     const workspacePath = originalRun.workspace.replace(/^file:\/\//, '');
     const wsUri = originalRun.workspace.startsWith('file://') ? originalRun.workspace : `file://${originalRun.workspace}`;
-    const servers = discoverLanguageServers();
-    const server = servers.find(
-      (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
-    );
+    const server = getLanguageServer();
     if (!server) {
       updateRun(runId, { status: 'failed', lastError: 'Cannot resume review round: no language server found' });
       return;
     }
     const apiKey = getApiKey();
-    if (!apiKey) {
-      updateRun(runId, { status: 'failed', lastError: 'Cannot resume review round: no API key' });
-      return;
-    }
 
     const input: DispatchRunInput = {
       groupId: group.id,
@@ -3222,7 +3206,7 @@ export async function cancelRun(runId: string): Promise<void> {
   if (activeCascadeId) {
     const conn = getOwnerConnection(activeCascadeId);
     const apiKey = getApiKey();
-    if (conn && apiKey) {
+    if (conn) {
       await cancelRunInternal(runId, activeCascadeId, conn, apiKey, 'cancelled');
       return;
     }

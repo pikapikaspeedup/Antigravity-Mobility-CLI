@@ -22,15 +22,30 @@ export interface Conversation {
   id: string;
   title: string;
   workspace: string;
+  projectId?: string;
+  projectName?: string;
   mtime: number;
   steps: number;
+}
+
+export interface HubProjectFolder {
+  uri: string;
+  path: string;
+  allowWrite: boolean;
+  kind: 'git' | 'folder';
+}
+
+export interface HubProject {
+  id: string;
+  name: string;
+  folders: HubProjectFolder[];
 }
 
 export interface Server {
   pid: number;
   port: number;
   csrf: string;
-  workspace: string;
+  ideVersion?: string;
 }
 
 export interface Workspace {

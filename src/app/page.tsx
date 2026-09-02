@@ -12,12 +12,12 @@ import ProjectsPanel from '@/components/projects-panel';
 import LocaleToggle from '@/components/locale-toggle';
 import { useI18n } from '@/components/locale-provider';
 import { api, connectWs } from '@/lib/api';
-import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Workspace, TemplateSummaryFE, ResumeAction } from '@/lib/types';
+import type { AgentRun, Project, ModelConfig, Skill, StepsData, Workflow, TemplateSummaryFE, ResumeAction } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { Download, Menu, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { buildWorkspaceOptions } from '@/lib/workspace-options';
+
 import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
 import { getModelLabel } from '@/lib/model-labels';
 import { AppShell, StatusChip, WorkspaceHeader } from '@/components/ui/app-shell';
@@ -50,9 +50,7 @@ export default function Home() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null);
   const [agentRunsLoading, setAgentRunsLoading] = useState(true);
-  const [agentServers, setAgentServers] = useState<Server[]>([]);
-  const [agentWorkspacesRaw, setAgentWorkspacesRaw] = useState<Workspace[]>([]);
-  const [hiddenWorkspaces, setHiddenWorkspaces] = useState<string[]>([]);
+
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<string | null>(null);
   const [selectedKnowledgeTitle, setSelectedKnowledgeTitle] = useState('');
   const [knowledgeRefreshSignal, setKnowledgeRefreshSignal] = useState(0);
@@ -140,12 +138,9 @@ export default function Home() {
     }
 
     try {
-      const [fetchedProjects, runs, servers, workspaces, hidden] = await Promise.all([
+      const [fetchedProjects, runs] = await Promise.all([
         api.projects().catch(() => [] as Project[]),
         api.agentRuns(),
-        api.servers(),
-        api.workspaces(),
-        fetch('/api/workspaces/close').then(res => res.json()).catch(() => [] as string[]),
       ]);
 
       setProjects(fetchedProjects);
@@ -154,16 +149,10 @@ export default function Home() {
         ? (runs.some(run => run.runId === preferredRunId) ? preferredRunId : pickDefaultAgentRun(runs, prev))
         : pickDefaultAgentRun(runs, prev));
       setActiveRunsCount(runs.filter(run => isAgentRunActive(run.status)).length);
-      setAgentServers(servers);
-      setAgentWorkspacesRaw(workspaces.workspaces || []);
-      setHiddenWorkspaces(hidden || []);
     } catch {
       setActiveRunsCount(0);
       setAgentRuns([]);
       setSelectedAgentRunId(null);
-      setAgentServers([]);
-      setAgentWorkspacesRaw([]);
-      setHiddenWorkspaces([]);
     } finally {
       agentStateLoadedRef.current = true;
       setAgentRunsLoading(false);
@@ -229,9 +218,9 @@ export default function Home() {
     setActiveTasks(prev => prev.map(task => task.cascadeId === id ? { ...task, title: title || id.slice(0, 8) } : task));
   };
 
-  const handleNew = async (workspace: string) => {
+  const handleNew = async (projectId: string) => {
     try {
-      const response = await api.createConversation(workspace);
+      const response = await api.createConversation(projectId);
       if (response.error) {
         alert(response.error);
         return;
@@ -408,9 +397,6 @@ export default function Home() {
 
   const isRunning = isActive;
   const currentModelLabel = getModelLabel(currentModel, models, { autoLabel: t('composer.autoSelect') });
-  const agentWorkspaces = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces)
-    .filter(workspace => workspace.running && !workspace.hidden)
-    .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
   const selectedAgentRun = agentRuns.find(run => run.runId === selectedAgentRunId) || null;
   const displayTitle = sidebarSection === 'agents'
     ? t('shell.agents')
@@ -425,7 +411,7 @@ export default function Home() {
           <Sidebar
             activeId={activeId}
             onSelect={handleSelect}
-            onNew={handleNew}
+            onNew={(projectId) => { void handleNew(projectId); }}
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
             currentModelLabel={currentModelLabel}
@@ -503,7 +489,6 @@ export default function Home() {
                 <ProjectsPanel
                   projects={projects}
                   agentRuns={agentRuns}
-                  workspaces={agentWorkspaces}
                   selectedProjectId={selectedProjectId}
                   onSelectProject={setSelectedProjectId}
                   onSelectRun={(runId) => {
@@ -530,7 +515,6 @@ export default function Home() {
                 <div className="grid gap-5 xl:grid-cols-[500px_minmax(0,1fr)] 2xl:grid-cols-[540px_minmax(0,1fr)]">
                   <div className="space-y-5">
                     <AgentRunsPanel
-                      workspaces={agentWorkspaces}
                       currentModel={currentModel}
                       currentModelLabel={currentModelLabel}
                       models={models}

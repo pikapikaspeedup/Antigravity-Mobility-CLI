@@ -8,46 +8,38 @@ import type {
   Rule,
   Server,
   Skill,
+  HubProject,
   Project,
   UserInfo,
   Workflow,
-  Workspace,
 } from '@/lib/types';
 import { useI18n } from '@/components/locale-provider';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { buildWorkspaceOptions, isWorkspaceHidden } from '@/lib/workspace-options';
+
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { getAgentRunTimeAgo, getAgentRunWorkspaceName, isAgentRunActive } from '@/lib/agent-run-utils';
 import {
   BookOpen,
   Bot,
   ChevronRight,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  FolderOpen,
-  Gamepad2,
-  Loader2,
   MessageSquare,
   Plus,
-  Power,
-  PowerOff,
   Puzzle,
   ScrollText,
-  Server as ServerIcon,
   Sparkles,
   FolderKanban,
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ModeTabs } from '@/components/ui/app-shell';
 
@@ -56,7 +48,7 @@ type SidebarSection = 'conversations' | 'projects' | 'agents' | 'knowledge';
 interface SidebarProps {
   activeId: string | null;
   onSelect: (id: string, title: string) => void;
-  onNew: (workspace: string) => void;
+  onNew: (projectId: string) => void;
   open: boolean;
   onClose: () => void;
   currentModelLabel: string;
@@ -72,13 +64,6 @@ interface SidebarProps {
   projects?: Project[];
   selectedProjectId?: string | null;
   onSelectProject?: (id: string) => void;
-}
-
-function getWorkspaceName(uri: string) {
-  if (!uri) return 'Other';
-  if (uri.includes('/playground/')) return 'Playground';
-  const parts = uri.replace('file://', '').split('/');
-  return parts[parts.length - 1] || parts[parts.length - 2] || uri;
 }
 
 function RailItem({
@@ -155,34 +140,25 @@ export default function Sidebar({
   const [skills, setSkills] = useState<Skill[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [servers, setServers] = useState<Server[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
+  const [hubProjects, setHubProjects] = useState<HubProject[]>([]);
+  const [selectedHubProjectId, setSelectedHubProjectId] = useState('');
+  const [folderPath, setFolderPath] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectError, setProjectError] = useState('');
   const [resourcesOpen, setResourcesOpen] = useState(false);
-  const [selectedWs, setSelectedWs] = useState('');
-  const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
-  const [launchTarget, setLaunchTarget] = useState('');
-  const [launchStatus, setLaunchStatus] = useState<'idle' | 'launching' | 'polling' | 'ready' | 'error'>('idle');
-  const [launchError, setLaunchError] = useState('');
-  const [closingWs, setClosingWs] = useState<string | null>(null);
-  const [hiddenWorkspaces, setHiddenWorkspaces] = useState<string[]>([]);
-  const [wsCollapsed, setWsCollapsed] = useState<Record<string, boolean>>({});
-  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
-  const [closeTarget, setCloseTarget] = useState('');
-  const [closeLoading, setCloseLoading] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [nextUser, nextConversations, nextKnowledge, nextSkills, nextWorkflows, nextServers, nextWorkspaces, nextRules, hidden] = await Promise.all([
+      const [nextUser, nextConversations, nextKnowledge, nextSkills, nextWorkflows, nextServers, nextRules, nextHubProjects] = await Promise.all([
         api.me(),
         api.conversations(),
         api.knowledge(),
         api.skills(),
         api.workflows(),
         api.servers(),
-        api.workspaces(),
         api.rules(),
-        fetch('/api/workspaces/close').then(res => res.json()).catch(() => [] as string[]),
+        api.hubProjects(),
       ]);
 
       setUser(nextUser);
@@ -191,9 +167,8 @@ export default function Sidebar({
       setSkills(nextSkills);
       setWorkflows(nextWorkflows);
       setServers(nextServers);
-      setWorkspaces(nextWorkspaces.workspaces || []);
       setRules(nextRules || []);
-      setHiddenWorkspaces(hidden || []);
+      setHubProjects(nextHubProjects || []);
     } catch {
       /* silent */
     }
@@ -214,138 +189,51 @@ export default function Sidebar({
   }, [load, knowledgeRefreshSignal]);
 
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('antigravity_selected_project') : '';
+    if (saved) setSelectedHubProjectId(saved);
   }, []);
 
-  const isWsRunning = useCallback((wsUri: string) => {
-    if (wsUri === 'playground') return true;
-    return servers.some(server => {
-      const workspace = server.workspace || '';
-      return workspace === wsUri || workspace.includes(wsUri) || wsUri.includes(workspace);
-    });
-  }, [servers]);
+  useEffect(() => {
+    if (!hubProjects.length) return;
+    if (selectedHubProjectId && hubProjects.some(p => p.id === selectedHubProjectId)) return;
+    setSelectedHubProjectId(hubProjects[0].id);
+  }, [hubProjects, selectedHubProjectId]);
 
-  const handleLaunchWorkspace = async (wsUri: string) => {
-    setLaunchStatus('launching');
-    setLaunchError('');
-    try {
-      await api.launchWorkspace(wsUri);
-      setLaunchStatus('polling');
-      let elapsed = 0;
-
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        elapsed += 2;
-        if (elapsed > 30) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setLaunchStatus('error');
-          setLaunchError(t('sidebar.launchTimeout'));
-          return;
-        }
-
-        try {
-          const freshServers = await api.servers();
-          const found = freshServers.some(server => {
-            const workspace = server.workspace || '';
-            return workspace === wsUri || workspace.includes(wsUri) || wsUri.includes(workspace);
-          });
-
-          if (found) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            setLaunchStatus('ready');
-            void load();
-          }
-        } catch {
-          /* silent */
-        }
-      }, 2000);
-    } catch (error: unknown) {
-      setLaunchStatus('error');
-      setLaunchError(error instanceof Error ? error.message : t('chat.errorOccurred'));
+  useEffect(() => {
+    if (selectedHubProjectId && typeof window !== 'undefined') {
+      localStorage.setItem('antigravity_selected_project', selectedHubProjectId);
     }
-  };
+  }, [selectedHubProjectId]);
 
-  const handleCloseWorkspace = useCallback(async (wsUri: string) => {
-    setClosingWs(wsUri);
-    try {
-      await api.closeWorkspace(wsUri);
-      void load();
-    } finally {
-      setClosingWs(null);
-    }
-  }, [load]);
-
-  const handleUnhideWorkspace = useCallback(async (wsUri: string) => {
-    try {
-      await fetch('/api/workspaces/close', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace: wsUri }),
-      });
-      void load();
-    } catch {
-      /* silent */
-    }
-  }, [load]);
-
-  const handleKillWorkspace = async (wsUri: string) => {
-    setCloseLoading(true);
-    try {
-      await fetch('/api/workspaces/kill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace: wsUri }),
-      });
-      window.setTimeout(() => {
-        void load();
-        setCloseLoading(false);
-        setCloseDialogOpen(false);
-      }, 2000);
-    } catch {
-      setCloseLoading(false);
-    }
-  };
-
-  const wsOptions = buildWorkspaceOptions(servers, workspaces, hiddenWorkspaces);
-  const visibleWsOptions = wsOptions.filter(option => !option.hidden);
-  const preferredWorkspace = visibleWsOptions.find(option => option.running)?.uri || visibleWsOptions[0]?.uri || '';
-  const effectiveSelectedWs = visibleWsOptions.some(option => option.uri === selectedWs) ? selectedWs : preferredWorkspace;
+  const selectedHubProject = hubProjects.find(p => p.id === selectedHubProjectId) || null;
 
   const handleStartConversation = () => {
-    if (!effectiveSelectedWs) return;
-
-    if (effectiveSelectedWs === 'playground' || isWsRunning(effectiveSelectedWs)) {
-      onNew(effectiveSelectedWs);
-      onClose();
-      return;
-    }
-
-    setLaunchTarget(effectiveSelectedWs);
-    setLaunchStatus('idle');
-    setLaunchError('');
-    setLaunchDialogOpen(true);
+    if (!selectedHubProjectId) return;
+    onNew(selectedHubProjectId);
+    onClose();
   };
 
-  const visibleConversations = conversations
-    .filter(conversation => !isWorkspaceHidden(conversation.workspace || '', hiddenWorkspaces))
-    .sort((a, b) => b.mtime - a.mtime);
+  const handleCreateFromFolder = async () => {
+    if (!folderPath.trim()) return;
+    setCreatingProject(true);
+    setProjectError('');
+    try {
+      const created = await api.createHubProject(folderPath.trim());
+      if (created.error) {
+        setProjectError(created.error);
+        return;
+      }
+      setHubProjects(prev => prev.some(p => p.id === created.id) ? prev : [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedHubProjectId(created.id);
+      setFolderPath('');
+    } catch (error: unknown) {
+      setProjectError(error instanceof Error ? error.message : t('chat.errorOccurred'));
+    } finally {
+      setCreatingProject(false);
+    }
+  };
 
-  // Group conversations by workspace
-  const convGroups: Record<string, typeof visibleConversations> = {};
-  visibleConversations.forEach(c => {
-    const wsName = getWorkspaceName(c.workspace || '');
-    if (!convGroups[wsName]) convGroups[wsName] = [];
-    convGroups[wsName].push(c);
-  });
-  const sortedGroupNames = Object.keys(convGroups).sort((a, b) => {
-    if (a === 'Playground') return 1;
-    if (b === 'Playground') return -1;
-    if (a === 'Other') return 1;
-    if (b === 'Other') return -1;
-    return convGroups[b].length - convGroups[a].length;
-  });
+  const visibleConversations = [...conversations].sort((a, b) => b.mtime - a.mtime);
   const activeAgentRuns = agentRuns.filter(run => isAgentRunActive(run.status));
   const recentAgentRuns = agentRuns.filter(run => !isAgentRunActive(run.status));
   const sortedKnowledgeItems = [...knowledgeItems].sort((a, b) => {
@@ -418,30 +306,70 @@ export default function Sidebar({
 
           {section === 'conversations' ? (
             <div className="rounded-[24px] border border-white/6 bg-[linear-gradient(180deg,rgba(18,30,49,0.92),rgba(13,22,36,0.94))] p-4 shadow-[var(--panel-shadow)]">
-              <div className="mt-4 space-y-3">
-                <Select value={effectiveSelectedWs} onValueChange={(value) => value && setSelectedWs(value)}>
-                  <SelectTrigger className="h-12 rounded-[18px] border-white/8 bg-white/[0.04] text-sm">
-                    <SelectValue placeholder={t('sidebar.selectWorkspace')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {visibleWsOptions.map(option => (
-                      <SelectItem key={option.uri} value={option.uri}>
-                        <div className="flex items-center gap-2">
-                          <div className={cn('h-2 w-2 rounded-full', option.running ? 'bg-emerald-500' : 'bg-muted-foreground/30')} />
-                          {option.name}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  className="h-12 w-full rounded-[18px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] text-sm font-semibold text-slate-950 shadow-[0_20px_50px_rgba(22,163,200,0.22)] transition-transform hover:-translate-y-0.5 hover:shadow-[0_24px_60px_rgba(22,163,200,0.28)]"
-                  onClick={handleStartConversation}
-                  disabled={!effectiveSelectedWs}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('sidebar.startConversation')}
-                </Button>
+              <div className="space-y-3">
+                {hubProjects.length > 0 ? (
+                  <>
+                    <Select value={selectedHubProjectId} onValueChange={(value) => value && setSelectedHubProjectId(value)}>
+                      <SelectTrigger className="h-12 rounded-[18px] border-white/8 bg-white/[0.04] text-sm">
+                        <SelectValue placeholder={t('sidebar.selectProject')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {hubProjects.map(project => (
+                          <SelectItem key={project.id} value={project.id}>
+                            <div className="flex min-w-0 flex-col">
+                              <span className="truncate">{project.name}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedHubProject ? (
+                      <div className="space-y-1 text-[11px] text-[var(--agent-text-soft)]">
+                        {selectedHubProject.folders.map(folder => (
+                          <div key={folder.uri} className="truncate" title={folder.path}>
+                            <span className={folder.allowWrite ? 'text-emerald-400' : 'text-amber-400'}>
+                              {folder.allowWrite ? t('sidebar.writable') : t('sidebar.readonly')}
+                            </span>
+                            {' · '}
+                            {folder.path}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <Button
+                      className="h-12 w-full rounded-[18px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] text-sm font-semibold text-slate-950 shadow-[0_20px_50px_rgba(22,163,200,0.22)] transition-transform hover:-translate-y-0.5 hover:shadow-[0_24px_60px_rgba(22,163,200,0.28)]"
+                      onClick={handleStartConversation}
+                      disabled={!selectedHubProjectId}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      {t('sidebar.startConversation')}
+                    </Button>
+                  </>
+                ) : (
+                  <div className="text-sm leading-6 text-[var(--agent-text-soft)]">
+                    {t('sidebar.noProjectsBody')}
+                  </div>
+                )}
+                <div className="space-y-2 border-t border-white/6 pt-3">
+                  <Input
+                    value={folderPath}
+                    onChange={(event) => setFolderPath(event.target.value)}
+                    placeholder={t('sidebar.folderPathPlaceholder')}
+                    className="h-10 rounded-[14px] border-white/8 bg-white/[0.04] text-xs"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void handleCreateFromFolder();
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    className="h-10 w-full rounded-[14px] border-white/10 bg-white/[0.03] text-xs"
+                    onClick={() => { void handleCreateFromFolder(); }}
+                    disabled={creatingProject || !folderPath.trim()}
+                  >
+                    {creatingProject ? t('common.loading') : t('sidebar.createFromFolder')}
+                  </Button>
+                  {projectError ? <div className="text-[11px] text-destructive">{projectError}</div> : null}
+                </div>
               </div>
             </div>
           ) : null}
@@ -453,54 +381,28 @@ export default function Sidebar({
           <ScrollArea className="h-full">
             <div className="space-y-5 p-4">
               {section === 'conversations' ? (
-                sortedGroupNames.length > 0 ? (
-                  <div className="space-y-4">
-                    {sortedGroupNames.map(wsName => (
-                      <div key={wsName} className="space-y-1.5">
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/[0.04] group"
-                          onClick={() => setWsCollapsed(p => ({ ...p, [wsName]: !p[wsName] }))}
-                        >
-                          <ChevronRight className={cn('h-3 w-3 shrink-0 text-[var(--app-text-muted)] transition-transform', !wsCollapsed[wsName] && 'rotate-90')} />
-                          {wsName === 'Playground'
-                            ? <Gamepad2 className="h-3.5 w-3.5 shrink-0 text-amber-400/70" />
-                            : <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />}
-                          <span className="flex-1 truncate text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--app-text-muted)] group-hover:text-[var(--app-text-soft)]">
-                            {wsName}
-                          </span>
-                          <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-1.5 text-[10px] font-mono opacity-60">
-                            {convGroups[wsName].length}
-                          </Badge>
-                        </button>
-
-                        {!wsCollapsed[wsName] && (
-                          <div className="space-y-1 pl-2">
-                            {convGroups[wsName].map(conversation => (
-                              <RailItem
-                                key={conversation.id}
-                                icon={conversation.workspace?.includes('/playground/')
-                                  ? <Gamepad2 className="h-4 w-4" />
-                                  : <MessageSquare className="h-4 w-4" />}
-                                title={conversation.title || t('sidebar.untitled')}
-                                meta={(
-                                  <>
-                                    {conversation.steps > 0 && (
-                                      <span>{conversation.steps} steps</span>
-                                    )}
-                                    <span>{formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}</span>
-                                  </>
-                                )}
-                                active={activeId === conversation.id}
-                                onClick={() => {
-                                  onSelect(conversation.id, conversation.title);
-                                  onClose();
-                                }}
-                              />
-                            ))}
-                          </div>
+                visibleConversations.length > 0 ? (
+                  <div className="space-y-1">
+                    {visibleConversations.map(conversation => (
+                      <RailItem
+                        key={conversation.id}
+                        icon={<MessageSquare className="h-4 w-4" />}
+                        title={conversation.title || t('sidebar.untitled')}
+                        meta={(
+                          <>
+                            {conversation.projectName ? <span>{conversation.projectName}</span> : null}
+                            {conversation.steps > 0 && (
+                              <span>{conversation.steps} steps</span>
+                            )}
+                            <span>{formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}</span>
+                          </>
                         )}
-                      </div>
+                        active={activeId === conversation.id}
+                        onClick={() => {
+                          onSelect(conversation.id, conversation.title);
+                          onClose();
+                        }}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -716,61 +618,17 @@ export default function Sidebar({
                     </TabsContent>
 
                     <TabsContent value="servers" className="m-0 space-y-2.5">
-                      {wsOptions.length > 0 ? wsOptions.map(option => (
-                        <div key={option.uri} className={cn('group flex items-center gap-2 rounded-xl border border-white/6 bg-white/[0.03] p-2', option.hidden && 'opacity-40')}>
-                          <div className={cn('h-2 w-2 shrink-0 rounded-full', option.running ? (option.hidden ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-muted-foreground/30')} />
+                      {servers.length > 0 ? servers.map(server => (
+                        <div key={server.pid} className="flex items-center gap-2 rounded-xl border border-white/6 bg-white/[0.03] p-2">
+                          <div className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-xs font-semibold">{option.name}</div>
-                            <div className="truncate text-[10px] text-muted-foreground">{option.uri.replace('file://', '')}</div>
-                          </div>
-                          {option.hidden ? (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-                              onClick={() => handleUnhideWorkspace(option.uri)}
-                              title={t('sidebar.showInSidebar')}
-                            >
-                              <Eye className="h-3 w-3" />
-                            </Button>
-                          ) : option.running ? (
-                            <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                                onClick={() => handleCloseWorkspace(option.uri)}
-                                disabled={closingWs === option.uri}
-                                title={t('sidebar.hideFromSidebar')}
-                              >
-                                {closingWs === option.uri ? <Loader2 className="h-3 w-3 animate-spin" /> : <EyeOff className="h-3 w-3" />}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-destructive hover:text-destructive"
-                                onClick={() => {
-                                  setCloseTarget(option.uri);
-                                  setCloseDialogOpen(true);
-                                }}
-                                title={t('sidebar.closeCompletely')}
-                              >
-                                <PowerOff className="h-3 w-3" />
-                              </Button>
+                            <div className="truncate text-xs font-semibold">Antigravity hub</div>
+                            <div className="truncate text-[10px] text-muted-foreground">
+                              pid {server.pid} · port {server.port}{server.ideVersion ? ` · v${server.ideVersion}` : ''}
                             </div>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0 text-emerald-600 opacity-0 transition-opacity group-hover:opacity-100 hover:text-emerald-600"
-                              onClick={() => handleLaunchWorkspace(option.uri)}
-                              title={t('sidebar.launchWorkspace')}
-                            >
-                              <Power className="h-3 w-3" />
-                            </Button>
-                          )}
+                          </div>
                         </div>
-                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">{t('sidebar.noWorkspaces')}</div>}
+                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">No hub running</div>}
                     </TabsContent>
                   </ScrollArea>
                 </div>
@@ -778,121 +636,6 @@ export default function Sidebar({
             </div>
           </CollapsibleContent>
         </Collapsible>
-
-        <Dialog
-          open={launchDialogOpen}
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) {
-              if (pollRef.current) clearInterval(pollRef.current);
-              setLaunchDialogOpen(false);
-            }
-          }}
-        >
-          <DialogContent className="sm:max-w-[420px]">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <ServerIcon className="h-5 w-5 text-amber-500" />
-                {t('sidebar.workspaceNotRunning')}
-              </DialogTitle>
-              <DialogDescription>
-                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                  {launchTarget.replace('file://', '').split('/').pop()}
-                </span>{' '}
-                {t('sidebar.workspaceNotRunningBody', { workspace: launchTarget.replace('file://', '').split('/').pop() || '' })}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="py-2">
-              {launchStatus === 'idle' ? <p className="text-sm text-muted-foreground">{t('sidebar.launchBody')}</p> : null}
-              {launchStatus === 'launching' ? (
-                <div className="flex items-center gap-3 text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
-                  <span>{t('sidebar.openingWorkspace')}</span>
-                </div>
-              ) : null}
-              {launchStatus === 'polling' ? (
-                <div className="flex items-center gap-3 text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin text-sky-500" />
-                  <span>{t('sidebar.waitingForServer')}</span>
-                </div>
-              ) : null}
-              {launchStatus === 'ready' ? (
-                <div className="flex items-center gap-3 text-sm text-emerald-600">
-                  <Power className="h-4 w-4" />
-                  <span className="font-medium">{t('sidebar.serverReady')}</span>
-                </div>
-              ) : null}
-              {launchStatus === 'error' ? <div className="text-sm text-destructive">{launchError}</div> : null}
-            </div>
-
-            <DialogFooter>
-              {launchStatus === 'idle' ? (
-                <>
-                  <Button variant="outline" onClick={() => setLaunchDialogOpen(false)}>{t('common.cancel')}</Button>
-                  <Button onClick={() => handleLaunchWorkspace(launchTarget)}>
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    {t('sidebar.openInAntigravity')}
-                  </Button>
-                </>
-              ) : null}
-              {(launchStatus === 'launching' || launchStatus === 'polling') ? (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (pollRef.current) clearInterval(pollRef.current);
-                    setLaunchDialogOpen(false);
-                  }}
-                >
-                  {t('common.cancel')}
-                </Button>
-              ) : null}
-              {launchStatus === 'ready' ? (
-                <Button
-                  onClick={() => {
-                    setLaunchDialogOpen(false);
-                    onNew(launchTarget);
-                    onClose();
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('sidebar.startConversation')}
-                </Button>
-              ) : null}
-              {launchStatus === 'error' ? (
-                <>
-                  <Button variant="outline" onClick={() => setLaunchDialogOpen(false)}>{t('common.close')}</Button>
-                  <Button onClick={() => handleLaunchWorkspace(launchTarget)}>{t('common.retry')}</Button>
-                </>
-              ) : null}
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={closeDialogOpen} onOpenChange={(nextOpen) => { if (!nextOpen) setCloseDialogOpen(false); }}>
-          <DialogContent className="sm:max-w-[420px]">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-destructive">
-                <PowerOff className="h-5 w-5" />
-                {t('sidebar.closeWorkspaceTitle')}
-              </DialogTitle>
-              <DialogDescription asChild>
-                <div className="space-y-2">
-                  <p>{t('sidebar.closeWorkspaceBody', { workspace: closeTarget.replace('file://', '').split('/').pop() || '' })}</p>
-                  <p className="text-xs text-amber-600 dark:text-amber-400">{t('sidebar.closeWorkspaceWarning')}</p>
-                </div>
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setCloseDialogOpen(false)} disabled={closeLoading}>
-                {t('common.cancel')}
-              </Button>
-              <Button variant="destructive" onClick={() => handleKillWorkspace(closeTarget)} disabled={closeLoading}>
-                {closeLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PowerOff className="mr-2 h-4 w-4" />}
-                {t('sidebar.closeCompletely')}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </aside>
     </>
   );

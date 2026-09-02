@@ -178,6 +178,7 @@ export function createRun(input: {
   taskEnvelope?: TaskEnvelope;
   sourceRunIds?: string[];
   projectId?: string;
+  hubProjectId?: string;
   // V3.5: Pipeline tracking
   pipelineId?: string;
   pipelineStageIndex?: number;
@@ -185,6 +186,7 @@ export function createRun(input: {
   const run: AgentRunState = {
     runId: randomUUID(),
     projectId: input.projectId,
+    hubProjectId: input.hubProjectId,
     groupId: input.groupId,
     workspace: input.workspace,
     prompt: input.prompt,

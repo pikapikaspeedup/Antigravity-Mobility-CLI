@@ -32,7 +32,6 @@ import type {
   AgentRun, 
   Project, 
   ModelConfig, 
-  Workspace, 
   TemplateSummaryFE, 
   ResumeAction 
 } from '@/lib/types';
@@ -40,7 +39,6 @@ import type {
 interface ProjectsPanelProps {
   projects: Project[];
   agentRuns: AgentRun[];
-  workspaces: Workspace[];
   onSelectProject?: (projectId: string) => void;
   onSelectRun?: (runId: string) => void;
   selectedProjectId?: string | null;
@@ -84,7 +82,6 @@ function StatusBadge({ status }: { status: string }) {
 export default function ProjectsPanel({
   projects,
   agentRuns,
-  workspaces,
   onSelectProject,
   selectedProjectId,
   templates,
@@ -110,7 +107,6 @@ export default function ProjectsPanel({
   const [formData, setFormData] = useState({
     name: '',
     goal: '',
-    workspace: workspaces[0]?.uri || '',
     templateId: '',
   });
 
@@ -186,7 +182,7 @@ export default function ProjectsPanel({
       await api.dispatchRun({
         projectId: dispatchingProject.projectId,
         templateId: dispatchData.templateId,
-        workspace: dispatchingProject.workspace || workspaces[0]?.uri || '',
+        workspace: dispatchingProject.workspace,
         prompt: dispatchData.prompt,
       });
       setIsDispatchDialogOpen(false);
@@ -202,7 +198,6 @@ export default function ProjectsPanel({
     setFormData({
       name: '',
       goal: '',
-      workspace: workspaces[0]?.uri || '',
       templateId: '',
     });
     setIsCreateDialogOpen(true);
@@ -214,7 +209,6 @@ export default function ProjectsPanel({
     setFormData({
       name: project.name,
       goal: project.goal,
-      workspace: project.workspace || workspaces[0]?.uri || '',
       templateId: project.templateId || '',
     });
     setIsEditDialogOpen(true);
@@ -477,24 +471,6 @@ export default function ProjectsPanel({
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-[var(--app-text-soft)]">{t('projects.workspace')}</label>
-              <Select
-                value={formData.workspace || ''}
-                onValueChange={(v) => v && setFormData({ ...formData, workspace: v })}
-              >
-                <SelectTrigger className="bg-white/5">
-                  <SelectValue placeholder="Select workspace" />
-                </SelectTrigger>
-                <SelectContent>
-                  {workspaces.map((w) => (
-                    <SelectItem key={w.uri} value={w.uri}>
-                      {w.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
               <label className="text-sm font-medium text-[var(--app-text-soft)]">{t('projects.selectTemplate')} (Optional)</label>
               <Select
                 value={formData.templateId || 'none'}
@@ -516,7 +492,7 @@ export default function ProjectsPanel({
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setIsCreateDialogOpen(false)}>{t('common.cancel')}</Button>
-            <Button onClick={handleCreate} disabled={isSubmitting || !formData.name || !formData.goal || !formData.workspace}>
+            <Button onClick={handleCreate} disabled={isSubmitting || !formData.name || !formData.goal}>
               {isSubmitting ? t('common.loading') : t('common.save')}
             </Button>
           </DialogFooter>

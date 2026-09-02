@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getOwnerConnection, refreshOwnerMap, convOwnerMap, ownerMapAge, grpc } from '@/lib/bridge/gateway';
+import { resolveConversationFolders } from '@/lib/bridge/agy-projects';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SendMsg');
@@ -23,7 +24,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const originalText = text;
   text = ""; // Clear text so grpc.ts doesn't duplicate
 
-  let workspacePath = conn.workspace?.replace(/^file:\/\//, '') || process.cwd();
+  let workspacePath = resolveConversationFolders(cascadeId)[0] || process.cwd();
 
   while ((match = fileRegex.exec(originalText)) !== null) {
     // Push text before the match

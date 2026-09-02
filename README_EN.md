@@ -129,8 +129,10 @@ On first startup, the Gateway automatically syncs Agent templates, workflows, an
 > ⚠️ **System Requirement**: This project currently **only supports macOS Apple Silicon (M-series chips)**.
 
 - **macOS** (Apple Silicon M1/M2/M3/M4)
-- **Antigravity** desktop app installed and running (at least one workspace open)
+- **Antigravity 2.0** desktop app installed and kept running (`Antigravity.app`; 1.x IDE is not used)
 - **Node.js** ≥ 20
+
+See **[docs/guide/antigravity-2.md](docs/guide/antigravity-2.md)** (Chinese) for hub + folder Project usage and account-risk notes.
 
 ### Install & Run
 
@@ -170,7 +172,7 @@ Full documentation: **[docs/GATEWAY_API.md](docs/GATEWAY_API.md)**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/conversations` | List all conversations (gRPC + SQLite + .pb merge) |
-| `POST` | `/api/conversations` | Create new. Body: `{"workspace": "file:///path"}` |
+| `POST` | `/api/conversations` | Create new. Body: `{"projectId":"<2.0 project id>"}` |
 | `POST` | `/api/conversations/:id/send` | Send message. Body: `{"text": "...", "model": "MODEL_ID"}` |
 | `GET` | `/api/conversations/:id/steps` | Get all steps (checkpoint) |
 | `POST` | `/api/conversations/:id/cancel` | Stop AI generation |
@@ -181,11 +183,9 @@ Full documentation: **[docs/GATEWAY_API.md](docs/GATEWAY_API.md)**
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/servers` | Running language_server instances |
-| `GET` | `/api/workspaces` | All known workspaces + playgrounds |
-| `POST` | `/api/workspaces/launch` | Open workspace in Antigravity (async) |
-| `POST` | `/api/workspaces/close` | Hide workspace from sidebar (server stays running) |
-| `DELETE` | `/api/workspaces/close` | Unhide workspace (show again) |
+| `GET` | `/api/servers` | Running 2.0 hub language_server |
+| `GET` | `/api/hub-projects` | 2.0 Projects (folder paths + allowWrite) |
+| `POST` | `/api/hub-projects` | Create or reuse a Project from a folder. Body: `{"folderPath":"/abs/path"}` |
 | `GET` | `/api/me` | User info |
 | `GET` | `/api/models` | Available models with quotas |
 | `GET` | `/api/skills` | All skills (global + workspace) |
@@ -343,7 +343,7 @@ The Gateway features a fully responsive design (built with shadcn/ui + Tailwind 
    - Or via terminal: `ipconfig getifaddr en0`.
 3. **Start the Gateway**: Run `npm run dev` on your computer (Next.js allows local network access by default).
 4. **Access on Mobile**: Open Safari or Chrome on your phone and go to `http://192.168.x.x:3000`.
-5. **Start Chatting**: Select a workspace you already have open in Antigravity on your desktop (or use Playground), and enjoy your full-featured AI coding assistant on mobile!
+5. **Start chatting**: pick a 2.0 Project (or paste a folder path to create one), then start a conversation.
 
 ---
 
@@ -352,11 +352,10 @@ The Gateway features a fully responsive design (built with shadcn/ui + Tailwind 
 *"There are currently more bugs than features..." — Here are the known compromises in this version:*
 
 1. **🔒 One-way Visibility**: Conversations created via the Gateway Web UI are **not visible** in the official Antigravity desktop Agent Manager's sidebar. However, conversations created in the desktop app *are* visible on the Web, and the actual chat histories sync perfectly both ways. (See [PITFALLS.md](PITFALLS.md) §16).
-2. **🏗️ Playground Disabled**: The special initialization logic for Playground (no workspace attached) is not fully implemented. Creating new conversations in Playground is temporarily disabled in the UI.
-3. **⚠️ Action Parsing & Approvals**: Parsing of AI Actions (e.g., URL navigation) is incomplete. Most actions are forcefully auto-approved by default. Sometimes things hang at the last step displaying a weird "Proceed/Reject" status. It is what it is.
-4. **↩️ Revert Bugs**: The 'Revert' action currently only seems to delete the AI's response, leaving your user prompt awkwardly hanging in the chat UI. 
-5. **⚙️ CLI Approvals & Workflows**: The CLI headless mode does not yet properly differentiate between "Plan" and "Fast" modes. If your CLI hits an unexpected manual approval state, it doesn't know what to do. We recommend writing robust Workflows that run without human intervention.
-6. **🔄 When in doubt, Reload!**: If the state stream gets stuck or multidevice sync glitches out (hmm...), just forcefully refresh the page.
+2. **⚠️ Action Parsing & Approvals**: Parsing of AI Actions (e.g., URL navigation) is incomplete. Most actions are forcefully auto-approved by default. Sometimes things hang at the last step displaying a weird "Proceed/Reject" status. It is what it is.
+3. **↩️ Revert Bugs**: The 'Revert' action currently only seems to delete the AI's response, leaving your user prompt awkwardly hanging in the chat UI.
+4. **⚙️ CLI Approvals & Workflows**: The CLI headless mode does not yet properly differentiate between "Plan" and "Fast" modes. If your CLI hits an unexpected manual approval state, it doesn't know what to do. We recommend writing robust Workflows that run without human intervention.
+5. **🔄 When in doubt, Reload!**: If the state stream gets stuck or multidevice sync glitches out (hmm...), just forcefully refresh the page.
 
 ## Important Notes
 
@@ -395,8 +394,11 @@ PRs welcome! If you discover new gRPC endpoints or fix routing issues, please up
 ## Disclaimer
 
 This is an **unofficial, community-driven** open-source tool built for educational and interoperability purposes.
+
+> ⚠️ **We do not know whether this can get your account banned.** Google’s FAQ states that using third-party software, tools, or services to access Antigravity violates the Terms of Service and may lead to suspension or termination. Similar unofficial clients were banned in February 2026. This Gateway is also unofficial. Use at your own risk.
+
 - This project **does not** bypass paywalls, crack authentication, or enable API abuse.
-- Running this project **strictly requires** a valid, authenticated installation of the official Antigravity desktop app on the user's machine.
+- Running this project **strictly requires** a valid, authenticated installation of the official **Antigravity 2.0** desktop app on the user's machine.
 - All AI processing consumes the user's own legal quotas.
 - This project is **not affiliated with, endorsed by, or authorized by Google DeepMind**. The "Antigravity" trademark belongs to its respective owners.
 - The internal gRPC API was reverse-engineered and may break at any time. **Use at your own risk**. The authors are not responsible for any potential account risks or data loss incurred by using this tool.

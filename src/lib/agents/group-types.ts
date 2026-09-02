@@ -223,6 +223,7 @@ export interface AgentRunState {
   projectId?: string;
   groupId: string;
   workspace: string;
+  hubProjectId?: string;
   parentConversationId?: string;
   childConversationId?: string;
   activeConversationId?: string;

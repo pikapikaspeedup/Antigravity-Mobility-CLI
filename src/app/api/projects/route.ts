@@ -70,13 +70,14 @@ function normalizeProject<T extends ReturnType<typeof listProjects>[number]>(pro
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, goal, templateId, workspace } = body;
+    const { name, goal, templateId } = body;
 
-    if (!name || !goal || !workspace) {
-      return NextResponse.json({ error: 'Missing required fields: name, goal, workspace' }, { status: 400 });
+    if (!name || !goal) {
+      return NextResponse.json({ error: 'Missing required fields: name, goal' }, { status: 400 });
     }
 
-    const project = createProject({ name, goal, templateId, workspace });
+    const { defaultWorkUri } = await import('@/lib/agents/gateway-home');
+    const project = createProject({ name, goal, templateId, workspace: defaultWorkUri() });
     return NextResponse.json(project, { status: 201 });
   } catch (err: unknown) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 });

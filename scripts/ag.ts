@@ -151,7 +151,7 @@ async function cmdRun(runId: string) {
 async function cmdDispatch(groupId: string, args: Record<string, string | string[]>) {
   const body: any = {
     groupId,
-    workspace: args.workspace || `file://${process.cwd()}`,
+    ...(args.workspace ? { workspace: args.workspace } : {}),
   };
   if (args.project) body.projectId = args.project;
   if (args.template) body.templateId = args.template;

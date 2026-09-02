@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { homedir } from 'os';
 import path from 'path';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { GATEWAY_HOME, CONVS_FILE } from '../agents/gateway-home';
 
 const STATE_DB_PATH = path.join(
@@ -16,6 +16,7 @@ export interface ConversationInfo {
   id: string;
   title: string;
   workspace: string;
+  projectId?: string;
   stepCount: number;
   createdAt?: string;
 }
@@ -36,10 +37,10 @@ function writeLocalCache(convs: ConversationInfo[]) {
   } catch {}
 }
 
-export function addLocalConversation(id: string, workspace: string, title: string = 'New conversation') {
+export function addLocalConversation(id: string, workspace: string, title: string = 'New conversation', projectId?: string) {
   const cache = readLocalCache();
   if (cache.some(c => c.id === id)) return;
-  cache.unshift({ id, title, workspace, stepCount: 0, createdAt: new Date().toISOString() });
+  cache.unshift({ id, title, workspace, projectId, stepCount: 0, createdAt: new Date().toISOString() });
   writeLocalCache(cache);
 }
 
@@ -64,41 +65,19 @@ function queryDb(sql: string): string {
 }
 
 export function getApiKey(): string {
-  const raw = queryDb("SELECT value FROM ItemTable WHERE key='antigravityAuthStatus';");
-  if (!raw) return '';
-  try { return JSON.parse(raw).apiKey || ''; } catch { return ''; }
+  return '';
 }
 
 export function getUserInfo(): { name: string; email: string; apiKey: string } {
-  const raw = queryDb("SELECT value FROM ItemTable WHERE key='antigravityAuthStatus';");
-  if (!raw) return { name: '', email: '', apiKey: '' };
-  try {
-    const data = JSON.parse(raw);
-    return { name: data.name || '', email: data.email || '', apiKey: data.apiKey || '' };
-  } catch { return { name: '', email: '', apiKey: '' }; }
+  return { name: '', email: '', apiKey: '' };
 }
 
 export function getWorkspaces(): Array<{ type: 'folder' | 'workspace'; uri: string }> {
-  const raw = queryDb("SELECT value FROM ItemTable WHERE key='history.recentlyOpenedPathsList';");
-  if (!raw) return [];
-  try {
-    const data = JSON.parse(raw);
-    return (data.entries || []).map((e: any) => {
-      if (e.folderUri) return { type: 'folder' as const, uri: e.folderUri };
-      if (e.workspace) return { type: 'workspace' as const, uri: e.workspace.configPath };
-      return null;
-    }).filter(Boolean);
-  } catch { return []; }
+  return [];
 }
 
 export function getPlaygrounds(): string[] {
-  const playgroundDir = path.join(homedir(), '.gemini/antigravity/playground');
-  try {
-    const output = execSync(`ls -1 "${playgroundDir}" 2>/dev/null`, { encoding: 'utf-8' });
-    return output.trim().split('\n').filter(Boolean).map(name =>
-      `file://${path.join(playgroundDir, name)}`
-    );
-  } catch { return []; }
+  return [];
 }
 
 /**

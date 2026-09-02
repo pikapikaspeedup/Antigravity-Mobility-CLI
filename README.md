@@ -89,8 +89,8 @@ Web UI、微信公众号、Obsidian 插件、CLI 命令行、MCP 协议 — 同�
 | 🔌 **MCP Server** | 外部 AI 通过 MCP 协议调用 Antigravity 的项目/Run/派发/干预能力 |
 | ⚡ **实时 WebSocket** | 代理 gRPC 流为 JSON，订阅即得 AI 实时回复 |
 | 🌍 **国际化** | 中文 / English 双语（276 条消息），一键切换，localStorage 持久化 |
-| 🔍 **自动发现** | 零配置，通过 `ps`+`lsof` 自动发现所有 language_server 实例 |
-| 🔀 **智能路由** | 将对话路由到正确的 workspace 匹配服务器（非随机） |
+| 🔍 **自动发现** | 零配置，发现本机正在运行的 Antigravity 2.0 hub Language Server |
+| 📁 **2.0 Project** | 用本地文件夹路径创建/复用官方 Project，对话按目录和 `allowWrite` 读写 |
 | 📱 **移动优先** | shadcn/ui + Tailwind CSS 4，手机到桌面全响应 |
 | 🎯 **Skill/Workflow** | 聊天输入框 `@skill` 和 `/workflow` 自动补全 |
 | 🔐 **写入范围审计** | Scope Governor 检测代码变更是否超出方案允许范围 |
@@ -131,7 +131,7 @@ Web UI、微信公众号、Obsidian 插件、CLI 命令行、MCP 协议 — 同�
 # 派发一个 coding 任务
 curl -X POST http://localhost:3000/api/agent-runs \
   -H 'Content-Type: application/json' \
-  -d '{"groupId":"coding-basic","workspace":"file:///path/to/project","prompt":"修复登录 token 刷新问题"}'
+  -d '{"groupId":"coding-basic","hubProjectId":"<hub-project-id>","prompt":"修复登录 token 刷新问题"}'
 ```
 
 或在 Web UI 左侧导航点 **Agents** → 选 Group → 输入任务 → Dispatch。
@@ -170,15 +170,16 @@ curl -X POST http://localhost:3000/api/agent-runs \
 │  │  discovery.ts ── 进程发现 (ps + lsof)                  │   │
 │  │  grpc.ts      ── gRPC-Web Connect 编解码               │   │
 │  │  gateway.ts   ── Owner 路由 + 连接管理                  │   │
-│  │  statedb.ts   ── SQLite 读取 (state.vscdb)             │   │
+│  │  statedb.ts   ── 本地对话缓存                             │   │
+│  │  agy-projects ── 2.0 Project（文件夹 + 权限）             │   │
 │  │  tunnel.ts    ── Cloudflare Tunnel                     │   │
 │  └──────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────┘
                                │ gRPC-Web (HTTPS, 127.0.0.1)
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│          Antigravity Language Server（IDE 内置，多实例）        │
-│     每个 workspace 一个，共享 .pb 文件，隔离的内存状态            │
+│     Antigravity 2.0 hub Language Server（单个进程）            │
+│     Project = 文件夹路径 + allowWrite，对话绑在这些目录上         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -219,11 +220,14 @@ curl -X POST http://localhost:3000/api/agent-runs \
 
 ### 前提条件
 
-> ⚠️ **系统要求**：目前**仅支持 macOS Apple Silicon（M 系列芯片）**。
+> ⚠️ **系统要求**：目前**仅支持 macOS Apple Silicon（M 系列芯片）**。  
+> ⚠️ 只对接 **Antigravity 2.0** 桌面应用（`Antigravity.app`）。1.x IDE 不再作为后端。
 
 - **macOS** (Apple Silicon M1/M2/M3/M4)
-- **Antigravity** 桌面应用已安装并运行（至少打开一个 workspace）
+- **Antigravity 2.0** 已安装并保持运行
 - **Node.js** ≥ 20
+
+📖 **[Antigravity 2.0 使用指南 →](docs/guide/antigravity-2.md)**（选 Project / 用文件夹创建 / 账号风险）
 
 ### 安装 & 启动
 
@@ -249,20 +253,24 @@ npm start          # 生产模式启动
 ### 验证
 
 ```bash
-# 发现的 Language Server 实例
+# 发现的 2.0 hub
 curl http://localhost:3000/api/servers
 
 # 用户信息
 curl http://localhost:3000/api/me
 
-# 可用模型
-curl http://localhost:3000/api/models | jq '.clientModelConfigs[] | {label}'
+# 2.0 Project（文件夹 + 权限）
+curl http://localhost:3000/api/hub-projects
 
-# Agent Group 列表
-curl http://localhost:3000/api/agent-groups
+# 用本地目录创建或复用 Project
+curl -X POST http://localhost:3000/api/hub-projects \
+  -H 'Content-Type: application/json' \
+  -d '{"folderPath":"/Users/you/code/my-app"}'
 
-# 项目列表
-curl http://localhost:3000/api/projects
+# 在该 Project 下新建对话
+curl -X POST http://localhost:3000/api/conversations \
+  -H 'Content-Type: application/json' \
+  -d '{"projectId":"<hub-project-id>"}'
 ```
 
 ---
@@ -275,8 +283,8 @@ curl http://localhost:3000/api/projects
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| `GET` | `/api/conversations` | 列出对话（支持 workspace 过滤） |
-| `POST` | `/api/conversations` | 新建对话 |
+| `GET` | `/api/conversations` | 列出对话（含 `projectId` / `projectName`） |
+| `POST` | `/api/conversations` | 新建对话。Body: `{"projectId":"<2.0 project id>"}` |
 | `POST` | `/api/conversations/:id/send` | 发送消息（支持 `@[file]` 附件、Agentic 模式） |
 | `GET` | `/api/conversations/:id/steps` | 获取步骤（checkpoint） |
 | `POST` | `/api/conversations/:id/cancel` | 停止生成 |
@@ -311,9 +319,9 @@ curl http://localhost:3000/api/projects
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| `GET` | `/api/servers` | Language Server 实例 |
-| `GET` | `/api/workspaces` | Workspace + Playground |
-| `POST` | `/api/workspaces/launch\|close\|kill` | 启动 / 隐藏 / 终止工作区 |
+| `GET` | `/api/servers` | 2.0 hub Language Server |
+| `GET` | `/api/hub-projects` | 2.0 Project 列表（文件夹 + allowWrite） |
+| `POST` | `/api/hub-projects` | 用本地路径创建或复用 Project。Body: `{"folderPath":"/abs/path"}` |
 | `GET` | `/api/me` | 用户信息 |
 | `GET` | `/api/models` | 模型及配额 |
 | `GET` | `/api/skills` | 技能列表 |
@@ -344,10 +352,15 @@ wscat -c ws://localhost:3000/ws
 ### 创建对话并提问
 
 ```bash
+# 创建或复用 2.0 Project（本地文件夹）
+PID=$(curl -sX POST http://localhost:3000/api/hub-projects \
+  -H 'Content-Type: application/json' \
+  -d '{"folderPath":"/path/to/project"}' | jq -r .id)
+
 # 创建对话
 CID=$(curl -sX POST http://localhost:3000/api/conversations \
   -H 'Content-Type: application/json' \
-  -d '{"workspace":"file:///path/to/project"}' | jq -r .cascadeId)
+  -d "{\"projectId\":\"$PID\"}" | jq -r .cascadeId)
 
 # 发送消息
 curl -sX POST "http://localhost:3000/api/conversations/$CID/send" \
@@ -366,7 +379,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 # 简单 coding 任务
 curl -X POST http://localhost:3000/api/agent-runs \
   -H 'Content-Type: application/json' \
-  -d '{"groupId":"coding-basic","workspace":"file:///path/to/project","prompt":"添加用户注册功能"}'
+  -d '{"groupId":"coding-basic","hubProjectId":"<hub-project-id>","prompt":"添加用户注册功能"}'
 
 # 查看 Run 状态
 curl http://localhost:3000/api/agent-runs | jq '.[0] | {runId, status, groupId}'
@@ -378,7 +391,7 @@ curl http://localhost:3000/api/agent-runs | jq '.[0] | {runId, status, groupId}'
 # 创建项目
 curl -X POST http://localhost:3000/api/projects \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Task Manager","goal":"构建一个任务管理系统","workspace":"file:///path/to/project"}'
+  -d '{"name":"Task Manager","goal":"构建一个任务管理系统"}'
 
 # 查看项目流水线进度
 curl http://localhost:3000/api/projects | jq '.[0] | {projectId, name, currentStage}'
@@ -394,7 +407,7 @@ BASE = "http://localhost:3000"
 # 派发 Agent Run
 run = requests.post(f"{BASE}/api/agent-runs",
     json={"groupId": "coding-basic",
-          "workspace": "file:///path/to/project",
+          "hubProjectId": "<hub-project-id>",
           "prompt": "实现基本的 CRUD 功能"}).json()
 
 # 轮询状态
@@ -527,7 +540,8 @@ Antigravity-Mobility-CLI/
 |------|------|
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | 📐 架构全景 — Mermaid 系统图、数据流、状态机、模块依赖 |
 | **[docs/guide/agent-user-guide.md](docs/guide/agent-user-guide.md)** | 🤖 Agent 系统手册 — 4 个 Group、交付链路、产物结构、Resume 操作 |
-| **[docs/guide/gateway-api.md](docs/guide/gateway-api.md)** | 📘 API 参考 — 38 个端点的 Schema、示例、模型表 |
+| **[docs/guide/antigravity-2.md](docs/guide/antigravity-2.md)** | 📁 2.0 使用指南 — hub、Project 文件夹、账号风险 |
+| **[docs/guide/gateway-api.md](docs/guide/gateway-api.md)** | 📘 API 参考 — REST / WebSocket 端点 Schema、示例、模型表 |
 | **[docs/guide/cli-guide.md](docs/guide/cli-guide.md)** | ⚙️ CLI 使用指南 — ag.ts 命令行完整用法 |
 | **[docs/guide/wechat-setup.md](docs/guide/wechat-setup.md)** | 📱 微信设置指南 — cc-connect + ACP 适配器配置 |
 | **[docs/guide/mcp-server.md](docs/guide/mcp-server.md)** | 🔌 MCP Server — 让外部 AI 调用 Antigravity |
@@ -565,7 +579,7 @@ Antigravity-Mobility-CLI/
 </p>
 
 - 📱 **躺在床上写代码** — 手机/iPad 通过 Web UI 直连 Antigravity
-- 💬 **微信里写代码** — 碎片时间用 `/models` 切换模型、`/workspace` 切换项目
+- 💬 **微信里写代码** — 碎片时间用 `/models` 切换模型、`/new` 开新会话
 - 📔 **Obsidian 里写代码** — 一边查文档一边让 AI 改代码
 - 🤖 **让 AI 拥有 AI** — REST API 对接 n8n/Make/Zapier，脚本直接调用
 - 🏭 **全自动产品交付** — 一句话需求 → 产品 → 架构 → 实现 → 审查 → 交付
@@ -585,16 +599,25 @@ Antigravity-Mobility-CLI/
 
 ## 🐛 已知缺陷
 
-1. **单向可见** — Gateway 新建的对话在官方 Agent Manager 中不可见（反过来可见，聊天记录双向同步）。详见 [PITFALLS.md](PITFALLS.md) §16
-2. **Playground 限制** — Web 端已禁止在 Playground 中新建对话
-3. **Action 解析不完整** — 部分 Action 被默认自动审批，偶尔出现滞留的 Proceed 按钮
-4. **撤回缺陷** — 只撤回 AI 回应，用户 Prompt 仍留在屏幕
-5. **CLI 自动审批** — CLI 模式遇到需要人工审批的阻塞可能卡住
-6. **偶尔抽风** — 多端同步异常时，强制刷新页面即可
+1. **单向可见** — Gateway 新建的对话在官方 2.0 侧栏里不一定能看到（聊天记录仍在本机 `.pb` 里）。详见 [PITFALLS.md](PITFALLS.md) §16
+2. **Action 解析不完整** — 部分 Action 被默认自动审批，偶尔出现滞留的 Proceed 按钮
+3. **撤回缺陷** — 只撤回 AI 回应，用户 Prompt 仍留在屏幕
+4. **CLI 自动审批** — CLI 模式遇到需要人工审批的阻塞可能卡住
+5. **偶尔抽风** — 多端同步异常时，强制刷新页面即可
 
 ---
 
 ## 🆕 更新日志
+
+<details>
+<summary><b>v0.4.0 — Antigravity 2.0 hub + Project 文件夹</b></summary>
+
+- 只对接 2.0 单个 hub Language Server，去掉 1.x 多 workspace 进程
+- 2.0 Project：用本地文件夹路径创建/复用官方 Project，对话按目录和 `allowWrite` 读写
+- 侧栏可选已有 Project，或填绝对路径一键创建
+- 账号风险写进 README 和使用指南：**不知道会不会被封号**
+
+</details>
 
 <details>
 <summary><b>v0.3.0 — 多 Agent 协作平台</b></summary>
@@ -654,8 +677,11 @@ Antigravity-Mobility-CLI/
 ## 免责声明
 
 本项目是出于学习和互操作性目的构建的**非官方、社区驱动**开源工具。
+
+> ⚠️ **不知道会不会被封号。** Google 官方 FAQ 写明：使用第三方软件、工具或服务访问 Antigravity 违反服务条款，可能导致账号暂停或终止。2026 年 2 月曾有 OpenClaw / OpenCode 用户因此被停用 Antigravity。本项目同样是非官方客户端。用不用、怎么用，后果自负。
+
 - **不提供**绕过付费墙、破解认证或滥用 API 的能力
-- **必须**依赖用户本机已安装并合法认证的官方 Antigravity 桌面应用
+- **必须**依赖用户本机已安装并合法认证的官方 Antigravity 2.0 桌面应用
 - 所有调用消耗用户个人正常配额
 - 与 Google DeepMind **没有关联、授权或背书**
 - 逆向工程接口随时可能变化，**使用后果自行承担**

@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const { groupId, workspace, prompt, model, parentConversationId, taskEnvelope, sourceRunIds, projectId, pipelineId, pipelineStageIndex } = body;
+    const { groupId, workspace, prompt, model, parentConversationId, taskEnvelope, sourceRunIds, projectId, hubProjectId, pipelineId, pipelineStageIndex } = body;
 
     let finalGroupId = groupId;
     let finalPipelineStageIndex = pipelineStageIndex;
@@ -63,9 +63,15 @@ export async function POST(req: Request) {
     if (!finalGroupId) {
       return NextResponse.json({ error: 'Missing required field: groupId (or pipelineId)' }, { status: 400 });
     }
-    if (!workspace) {
-      return NextResponse.json({ error: 'Missing required field: workspace' }, { status: 400 });
+    const { defaultWorkUri } = await import('@/lib/agents/gateway-home');
+    const { getAgyProject, primaryWritePath } = await import('@/lib/bridge/agy-projects');
+    const hubProject = hubProjectId ? getAgyProject(hubProjectId) : null;
+    if (hubProjectId && !hubProject) {
+      return NextResponse.json({ error: `Unknown hub project: ${hubProjectId}` }, { status: 400 });
     }
+    const resolvedWorkspace = workspace
+      || (hubProject && primaryWritePath(hubProject) ? `file://${primaryWritePath(hubProject)}` : '')
+      || defaultWorkUri();
 
     // V2: Either prompt or taskEnvelope.goal is required
     const goal = taskEnvelope?.goal || prompt;
@@ -102,11 +108,12 @@ export async function POST(req: Request) {
       }
     }
 
-    log.info({ groupId: finalGroupId, workspace: workspace.split('/').pop(), goalLength: goal.length, hasEnvelope: !!taskEnvelope }, 'Dispatching run');
+    log.info({ groupId: finalGroupId, goalLength: goal.length, hasEnvelope: !!taskEnvelope }, 'Dispatching run');
 
     const result = await dispatchRun({
       groupId: finalGroupId,
-      workspace,
+      workspace: resolvedWorkspace,
+      hubProjectId: hubProject?.id,
       prompt: goal,
       model,
       parentConversationId,

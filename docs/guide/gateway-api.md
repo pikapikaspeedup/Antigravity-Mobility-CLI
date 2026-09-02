@@ -2,9 +2,9 @@
 
 > **Base URL**: `http://localhost:3000`  
 > **WebSocket**: `ws://localhost:3000/ws`  
-> **认证**: 无需客户端传 API Key（Gateway 内部从 `state.vscdb` 自动获取）  
+> **认证**: 无需客户端传 API Key（2.0 hub 自行登录；Gateway 不再读 1.x `state.vscdb`）  
 > **Content-Type**: 所有 POST 请求均使用 `application/json`  
-> **Last Updated**: 2026-03-18
+> **Last Updated**: 2026-09-03
 
 本文档面向 **Headless CLI** 及所有需要程序化调用 Antigravity 对话能力的场景。
 
@@ -13,24 +13,29 @@
 ## 快速开始：一个完整的对话生命周期
 
 ```bash
-# 1. 查看可用 workspace 及其 language_server
+# 1. 确认 2.0 hub
 curl http://localhost:3000/api/servers
 
-# 2. 创建对话（指定 workspace URI）
+# 2. 用本地文件夹创建或复用 2.0 Project
+PID=$(curl -sX POST http://localhost:3000/api/hub-projects \
+  -H 'Content-Type: application/json' \
+  -d '{"folderPath":"/path/to/mytools"}' | jq -r .id)
+
+# 3. 创建对话（绑定该 Project）
 CID=$(curl -sX POST http://localhost:3000/api/conversations \
   -H 'Content-Type: application/json' \
-  -d '{"workspace": "file:///path/to/mytools"}' | jq -r .cascadeId)
+  -d "{\"projectId\": \"$PID\"}" | jq -r .cascadeId)
 
-# 3. 发送消息
+# 4. 发送消息
 curl -sX POST "http://localhost:3000/api/conversations/$CID/send" \
   -H 'Content-Type: application/json' \
   -d '{"text": "帮我分析这个项目的架构", "model": "MODEL_PLACEHOLDER_M26"}'
 
-# 4. 等待后获取全部步骤
+# 5. 等待后获取全部步骤
 sleep 15
 curl -s "http://localhost:3000/api/conversations/$CID/steps" | jq '.steps | length'
 
-# 5. 提取 AI 回复文本
+# 6. 提取 AI 回复文本
 curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
   jq -r '.steps[] | select(.plannerResponse) | .plannerResponse.modifiedResponse'
 ```
@@ -66,7 +71,9 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
   {
     "id": "7e95db6b-5b5d-4035-a387-d9fd1d882fdb",
     "title": "Documenting External APIs",
-    "workspace": "file:///Applications/Antigravity.app/Contents/Resources/app",
+    "workspace": "file:///Users/you/code/mytools",
+    "projectId": "dd2ae68d-dca2-4e51-8a1f-a66a44513af8",
+    "projectName": "mytools",
     "mtime": 1773872543459.765,
     "steps": 515
   }
@@ -77,7 +84,9 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 |------|------|------|
 | `id` | `string` | 对话唯一 UUID（即 `cascadeId`） |
 | `title` | `string` | 对话标题（由 AI 自动生成的摘要；无标题时为 `Conversation {id前8位}`） |
-| `workspace` | `string` | 所属工作空间的 `file://` URI |
+| `workspace` | `string` | 绑定目录的 `file://` URI |
+| `projectId` | `string` | Antigravity 2.0 Project id（可选） |
+| `projectName` | `string` | 2.0 Project 名称（可选） |
 | `mtime` | `number` | 最后修改时间戳（毫秒级 Unix epoch） |
 | `steps` | `number` | 总步骤数（含 user/AI/tool 等所有类型） |
 
@@ -85,18 +94,16 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ### `POST /api/conversations` — 创建新对话
 
-**功能**: 创建一个新的 Cascade 对话。内部自动处理 `AddTrackedWorkspace`（非专属 server 时）和 `UpdateConversationAnnotations`（防幽灵对话过滤）。
+**功能**: 在 2.0 hub 上创建 Cascade 对话。传入 `projectId` 时会登记该 Project 的文件夹并带上 `allowWrite`。
 
 **Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `workspace` | `string` | 否 | workspace `file://` URI。不传默认 `file:///path/to/mytools` |
-
-特殊值 `"playground"` 会自动在 `~/.gemini/antigravity/playground/` 下创建沙箱目录。
+| `projectId` | `string` | 否 | `GET /api/hub-projects` 返回的 2.0 Project id。不传则不绑定文件夹 |
 
 ```json
-{ "workspace": "file:///path/to/my-project" }
+{ "projectId": "dd2ae68d-dca2-4e51-8a1f-a66a44513af8" }
 ```
 
 **Response** `200 OK`:
@@ -110,12 +117,40 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **内部执行流程**（客户端无需关心）:
 ```
-1. getLanguageServer(wsUri) → 找专属 server？
-   ├─ YES → 直接使用
-   └─ NO  → fallback 到 servers[0] → 先调 AddTrackedWorkspace
-2. grpc.startCascade(port, csrf, apiKey, wsUri)
-3. grpc.updateConversationAnnotations(cascadeId, {lastUserViewTime: now})
-4. addLocalConversation(cascadeId, wsUri, title) → 本地缓存
+1. getLanguageServer() → 2.0 hub
+2. 若有 projectId：AddTrackedWorkspace(各 folderPath) + StartCascade({ projectId, workspaceUris })
+3. UpdateConversationAnnotations({ lastUserViewTime })
+4. addLocalConversation(cascadeId, folder, title, projectId)
+```
+
+---
+
+### `GET /api/hub-projects` — 列出 2.0 Project
+
+**功能**: 读取 `~/.gemini/config/projects/*.json`。每个 Project 是一组本地文件夹 + `allowWrite`。
+
+**Response** `200 OK`:
+```json
+[
+  {
+    "id": "dd2ae68d-dca2-4e51-8a1f-a66a44513af8",
+    "name": "my-app",
+    "folders": [
+      { "uri": "file:///Users/you/code/my-app", "path": "/Users/you/code/my-app", "allowWrite": true, "kind": "git" }
+    ]
+  }
+]
+```
+
+### `POST /api/hub-projects` — 用文件夹创建或复用 Project
+
+**Request Body**: `{ "folderPath": "/Users/you/code/my-app", "name": "可选名称" }`
+
+该路径已在某个 Project 里则 `reused: true` 并返回已有记录；否则调用官方 `CreateProject`。
+
+**Response** `200/201`:
+```json
+{ "id": "...", "name": "my-app", "folders": [...], "reused": false }
 ```
 
 ---

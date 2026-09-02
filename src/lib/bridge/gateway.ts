@@ -2,11 +2,6 @@
  * Gateway — shared state and helpers for API routes and WebSocket server.
  * Extracted from the old Express src/index.ts.
  */
-import path from 'path';
-import { randomBytes } from 'crypto';
-import { mkdirSync, existsSync } from 'fs';
-import { homedir } from 'os';
-
 import { discoverLanguageServers, getLanguageServer } from './discovery';
 import { getApiKey } from './statedb';
 import * as grpc from './grpc';
@@ -22,16 +17,15 @@ export * as grpc from './grpc';
 // --- Helper: get all server connections ---
 export function getAllConnections() {
   const servers = discoverLanguageServers();
+  if (servers.length === 0) return [];
   const apiKey = getApiKey();
-  if (!apiKey || servers.length === 0) return [];
   return servers.map(s => ({ ...s, apiKey }));
 }
 
 export function getDefaultConnection() {
   const srv = getLanguageServer();
-  const apiKey = getApiKey();
-  if (!srv || !apiKey) return null;
-  return { ...srv, apiKey };
+  if (!srv) return null;
+  return { ...srv, apiKey: getApiKey() };
 }
 
 // --- Conversation → Owner Server Mapping ---
@@ -72,70 +66,34 @@ export function getOwnerConnection(cascadeId: string) {
   // 3. Fallback
   const conns = getAllConnections();
   log.debug({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length, source: 'fallback' }, 'Owner lookup fallback');
-  return conns.length > 0 ? conns[0] : null;
+  return conns.length > 0
+    ? { port: conns[0].port, csrf: conns[0].csrf, apiKey: conns[0].apiKey, stepCount: 0 }
+    : null;
 }
 
-/** Refresh the owner map from all servers */
+/** Refresh the owner map from the 2.0 hub. */
 export async function refreshOwnerMap() {
   const conns = getAllConnections();
-  const serverWorkspaceMap = new Map<number, string>();
-  const servers = discoverLanguageServers();
-  for (const conn of conns) {
-    const srv = servers.find(s => s.port === conn.port);
-    if (srv?.workspace) {
-      serverWorkspaceMap.set(conn.port, srv.workspace);
-    }
-  }
+  log.info({ serverCount: conns.length, servers: conns.map(c => String(c.port)).join(', ') }, 'OwnerMap refreshing');
 
-  log.info({ serverCount: conns.length, servers: conns.map(c => `${c.port}(${serverWorkspaceMap.get(c.port)?.split('/').pop() || '?'})`).join(', ') }, 'OwnerMap refreshing');
-
-  const wsMatched = new Map<string, OwnerInfo>();
-  const scFallback = new Map<string, OwnerInfo>();
+  convOwnerMap.clear();
 
   for (const conn of conns) {
     try {
       const data = await grpc.getAllCascadeTrajectories(conn.port, conn.csrf);
       const summaries = data?.trajectorySummaries || {};
-      const serverWs = serverWorkspaceMap.get(conn.port) || '';
-      const convCount = Object.keys(summaries).length;
-      log.debug({ port: conn.port, convCount, serverWs: serverWs.split('/').pop() }, 'Server trajectories loaded');
+      log.debug({ port: conn.port, convCount: Object.keys(summaries).length }, 'Hub trajectories loaded');
 
       for (const [id, info] of Object.entries(summaries) as [string, any][]) {
-        const steps = info.stepCount || 0;
-        const convWorkspaces: string[] = (info.workspaces || [])
-          .map((w: any) => w.workspaceFolderAbsoluteUri || '')
-          .filter(Boolean);
-          
-        const ownerWorkspace = convWorkspaces[0]?.replace('file://', '');
-        const ownerEntry: OwnerInfo = { port: conn.port, csrf: conn.csrf, apiKey: conn.apiKey, stepCount: steps, workspace: ownerWorkspace };
-
-        const matched = serverWs && convWorkspaces.some(ws => serverWs.includes(ws) || ws.includes(serverWs));
-        if (matched) {
-          const existing = wsMatched.get(id);
-          if (!existing || steps > existing.stepCount) {
-            wsMatched.set(id, ownerEntry);
-          }
-        }
-
-        const existing = scFallback.get(id);
-        if (!existing || steps > existing.stepCount) {
-          scFallback.set(id, ownerEntry);
-        }
+        convOwnerMap.set(id, {
+          port: conn.port,
+          csrf: conn.csrf,
+          apiKey: conn.apiKey,
+          stepCount: info.stepCount || 0,
+        });
       }
     } catch (e: any) {
       log.warn({ port: conn.port, err: e.message }, 'Failed to get trajectories');
-    }
-  }
-
-  convOwnerMap.clear();
-  const allIds = new Set([...wsMatched.keys(), ...scFallback.keys()]);
-  for (const id of allIds) {
-    const matched = wsMatched.get(id);
-    const fallback = scFallback.get(id);
-    if (matched) {
-      convOwnerMap.set(id, matched);
-    } else if (fallback) {
-      convOwnerMap.set(id, fallback);
     }
   }
 
@@ -155,14 +113,6 @@ export async function refreshOwnerMap() {
 
   ownerMapAge = Date.now();
   log.info({ total: convOwnerMap.size, preRegPending: preRegisteredOwners.size }, 'OwnerMap rebuilt');
-
-  for (const id of allIds) {
-    const matched = wsMatched.get(id);
-    const fallback = scFallback.get(id);
-    if (matched && fallback && matched.port !== fallback.port) {
-      log.debug({ cascadeId: id.slice(0,8), matchedPort: matched.port, fallbackPort: fallback.port, fallbackSteps: fallback.stepCount }, 'Owner routed by workspace match');
-    }
-  }
 }
 
 /**
@@ -192,36 +142,3 @@ export async function tryAllServers<T>(
   }
   throw new Error(`All ${conns.length} servers failed: ${errors.join('; ')}`);
 }
-
-// --- Playground name generator ---
-const PG_ADJECTIVES = [
-  'astral','blazing','celestial','cosmic','crystal','dark','deep','distant',
-  'dynamic','ecliptic','ethereal','frozen','galactic','giant','glacial',
-  'golden','gravitic','harmonic','icy','inertial','interstellar','ionic',
-  'iridescent','kinetic','lunar','nascent','nomad','orbital','polar',
-  'prismic','prograde','pyro','radiant','resonant','shining','silent',
-  'silver','spinning','stellar','synthetic','temporal','triple','twilight',
-  'ultraviolet','vacant','vast','velvet','white','zero',
-];
-const PG_NOUNS = [
-  'aldrin','andromeda','aurora','belt','cassini','chromosphere','copernicus',
-  'cosmos','curie','disk','eagle','einstein','expanse','feynman','filament',
-  'flare','galaxy','halley','hubble','ionosphere','kuiper','lagoon',
-  'magnetar','meteorite','nadir','nebula','newton','oort','orbit','orion',
-  'pathfinder','planetoid','planck','prominence','pulsar','radiation',
-  'rocket','rosette','singularity','sunspot','supernova','trifid',
-  'triangulum','whirlpool','zodiac',
-];
-const PLAYGROUND_DIR = path.join(homedir(), '.gemini/antigravity/playground');
-
-export function generatePlaygroundName(): string {
-  for (let i = 0; i < 50; i++) {
-    const adj = PG_ADJECTIVES[randomBytes(1)[0] % PG_ADJECTIVES.length];
-    const noun = PG_NOUNS[randomBytes(1)[0] % PG_NOUNS.length];
-    const name = `${adj}-${noun}`;
-    if (!existsSync(path.join(PLAYGROUND_DIR, name))) return name;
-  }
-  return `cosmic-${randomBytes(3).toString('hex')}`;
-}
-
-export const PLAYGROUND_DIR_PATH = PLAYGROUND_DIR;

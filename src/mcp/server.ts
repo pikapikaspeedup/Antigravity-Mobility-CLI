@@ -194,7 +194,7 @@ server.registerTool(
     title: "Dispatch Pipeline or Group",
     description: "Start a new agent run using a pipeline template or single group ID.",
     inputSchema: z.object({
-      workspace: z.string().describe("Workspace URI (e.g. file:///path/to/project)"),
+      workspace: z.string().optional().describe("Ignored. Antigravity 2.0 hub does not use workspaces."),
       prompt: z.string().describe("Goal or prompt for the pipeline/run"),
       projectId: z.string().optional().describe("Optional projectId to attach this run to"),
       templateId: z.string().optional().describe("Template ID (e.g. development-template-1). If provided, it starts a pipeline."),

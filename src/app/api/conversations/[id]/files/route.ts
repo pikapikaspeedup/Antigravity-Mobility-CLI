@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getOwnerConnection } from '@/lib/bridge/gateway';
+import { resolveConversationFolders } from '@/lib/bridge/agy-projects';
 import { createLogger } from '@/lib/logger';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -15,13 +16,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   
   const conn = getOwnerConnection(id);
   const maxResults = 25;
-
-  let workspacePath = conn?.workspace?.replace(/^file:\/\//, '') || process.cwd();
+  const roots = resolveConversationFolders(id);
+  const workspacePath = roots[0] || process.cwd();
   
   try {
-    // using fd if available, else fallback to find.
-    // fd is significantly faster.
-    const findCmd = `find "${workspacePath}" -type d \\( -name "node_modules" -o -name ".git" -o -name ".next" -o -name "dist" -o -name "out" \\) -prune -o -type f -iname "*${q}*" -print`;
+    const findParts = roots.map(root => `find "${root}" -type d \\( -name "node_modules" -o -name ".git" -o -name ".next" -o -name "dist" -o -name "out" \\) -prune -o -type f -iname "*${q}*" -print`);
+    const findCmd = findParts.join(' ; ');
     
     // Mac also supports fd, but we'll stick to 'find' as it's built-in.
     

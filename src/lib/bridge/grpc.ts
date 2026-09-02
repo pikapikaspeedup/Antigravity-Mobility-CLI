@@ -1,5 +1,6 @@
 import https from 'https';
 import { IncomingMessage } from 'http';
+import { getDiscoveredIdeVersion } from './discovery';
 
 const agent = new https.Agent({ rejectUnauthorized: false });
 
@@ -152,14 +153,15 @@ export function grpcCall(opts: GrpcCallOptions): Promise<any> {
 
 // --- Convenience wrappers ---
 
-export function buildMetadata(apiKey: string) {
-  return {
+export function buildMetadata(apiKey: string, ideVersion?: string) {
+  const metadata: Record<string, string> = {
     ideName: 'antigravity',
-    apiKey,
     locale: 'en',
-    ideVersion: '1.20.6',
+    ideVersion: ideVersion || getDiscoveredIdeVersion() || '2.11.0',
     extensionName: 'antigravity',
   };
+  if (apiKey) metadata.apiKey = apiKey;
+  return metadata;
 }
 
 export function buildCascadeConfig(
@@ -184,15 +186,23 @@ export function buildCascadeConfig(
 
 
 
-export async function startCascade(port: number, csrf: string, apiKey: string, workspaceUri: string) {
+export async function startCascade(
+  port: number,
+  csrf: string,
+  apiKey: string,
+  options?: string | { projectId?: string; workspaceUris?: string[] },
+) {
+  const opts = typeof options === 'string' ? { workspaceUris: [options] } : (options || {});
+  const body: Record<string, unknown> = {
+    metadata: buildMetadata(apiKey),
+    source: 'CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT',
+  };
+  if (opts.projectId) body.projectId = opts.projectId;
+  if (opts.workspaceUris?.length) body.workspaceUris = opts.workspaceUris;
   return grpcCall({
     port, csrf,
     method: 'StartCascade',
-    body: {
-      metadata: buildMetadata(apiKey),
-      source: 'CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT',
-      workspaceUris: [workspaceUri],
-    },
+    body,
   });
 }
 
@@ -318,11 +328,29 @@ export async function initializePanelState(port: number, csrf: string, apiKey: s
   });
 }
 
+export async function createProject(port: number, csrf: string, project: { id: string; name: string; projectResources: unknown }) {
+  return grpcCall({
+    port, csrf,
+    method: 'CreateProject',
+    body: { project },
+  });
+}
+
+export async function resolveFolder(port: number, csrf: string, folderUri: string) {
+  return grpcCall({
+    port, csrf,
+    method: 'ResolveFolder',
+    body: { folderUri },
+  });
+}
+
 export async function addTrackedWorkspace(port: number, csrf: string, workspacePath: string) {
+  // 2.0 hub requires a filesystem path, not a file:// URI.
+  const workspace = workspacePath.replace(/^file:\/\//, '');
   return grpcCall({
     port, csrf,
     method: 'AddTrackedWorkspace',
-    body: { workspace: workspacePath },
+    body: { workspace },
   });
 }
 
@@ -371,6 +399,14 @@ export async function getAllRules(port: number, csrf: string) {
     port, csrf,
     method: 'GetAllRules',
     body: {},
+  });
+}
+
+export async function getUserStatus(port: number, csrf: string, apiKey: string = '') {
+  return grpcCall({
+    port, csrf,
+    method: 'GetUserStatus',
+    body: { metadata: buildMetadata(apiKey) },
   });
 }
 

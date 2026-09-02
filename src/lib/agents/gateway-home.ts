@@ -16,6 +16,11 @@ const DEFAULT_HOME = path.join(homedir(), '.gemini', 'antigravity', 'gateway');
 
 export const GATEWAY_HOME = process.env.AG_GATEWAY_HOME || DEFAULT_HOME;
 
+/** Default working root for agent artifacts when no workspace is selected. */
+export function defaultWorkUri(): string {
+  return `file://${GATEWAY_HOME}`;
+}
+
 if (!existsSync(GATEWAY_HOME)) {
   mkdirSync(GATEWAY_HOME, { recursive: true });
 }
