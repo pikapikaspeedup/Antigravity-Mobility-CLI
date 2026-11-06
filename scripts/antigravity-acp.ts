@@ -18,9 +18,9 @@
 import { createInterface } from 'readline';
 import WebSocket from 'ws';
 
-const BASE = process.env.AG_BASE_URL || 'http://127.0.0.1:3000';
+const BASE = process.env.AG_BASE_URL || 'http://127.0.0.1:3100';
 
-const DEFAULT_MODEL = 'MODEL_PLACEHOLDER_M47'; // Gemini 3 Flash
+const DEFAULT_MODEL = 'MODEL_PLACEHOLDER_M417'; // Gemini 4 Argon (High)
 
 // ─── Session ─────────────────────────────────────────────────────────────
 
@@ -35,8 +35,9 @@ interface Session {
 const sessions = new Map<string, Session>();
 let counter = 0;
 
-// Workspace cache — only RUNNING servers with a workspace
-let runningWorkspaces: { workspace: string; port: number }[] = [];
+// Workspace cache — 2.0 hub projects + any legacy servers with a workspace
+let runningWorkspaces: { workspace: string; port: number; projectId?: string; name?: string }[] = [];
+let cachedConvs: any[] = [];
 
 // Model cache
 interface ModelInfo {
@@ -89,6 +90,27 @@ async function post(path: string, body?: any): Promise<any> {
 // ─── Data fetchers ───────────────────────────────────────────────────────
 
 async function refreshWorkspaces() {
+  try {
+    const convs: any[] = await get('/api/conversations');
+    if (Array.isArray(convs)) {
+      cachedConvs = convs.slice(0, 15);
+    }
+  } catch {}
+
+  try {
+    const hubProjects: any[] = await get('/api/hub-projects');
+    if (Array.isArray(hubProjects) && hubProjects.length > 0) {
+      runningWorkspaces = hubProjects
+        .filter((p: any) => p.folders && p.folders.length > 0)
+        .map((p: any) => ({
+          workspace: p.folders[0].uri || `file://${p.folders[0].path}`,
+          port: 0,
+          projectId: p.id,
+          name: p.name,
+        }));
+      return;
+    }
+  } catch {}
   const servers: any[] = await get('/api/servers');
   runningWorkspaces = servers
     .filter((s: any) => s.workspace)
@@ -120,18 +142,39 @@ function matchWorkspace(cwd?: string): string | undefined {
     || runningWorkspaces.find(w => uri.startsWith(w.workspace) || w.workspace.startsWith(uri))?.workspace;
 }
 
-function fmtWorkspaceList(): string {
+function fmtWorkspaceList(currentCascadeId?: string): string {
   const lines: string[] = [];
+  const projCount = runningWorkspaces.length + 1;
+  lines.push(`📂 Projects（发 ws 1~${projCount} 新建会话）：`);
   for (let i = 0; i < runningWorkspaces.length; i++) {
     const p = runningWorkspaces[i].workspace.replace('file://', '');
-    lines.push(`  ${i + 1}. ${p.split('/').pop() || p}\n     ${p}`);
+    lines.push(`  ${i + 1}. ${runningWorkspaces[i].name || p.split('/').pop() || p}\n     ${p}`);
   }
-  lines.push(`  ${runningWorkspaces.length + 1}. [Playground] (临时项目)`);
+  lines.push(`  ${projCount}. [Playground] (新建空白对话)`);
+
+  if (cachedConvs.length > 0) {
+    const startIdx = projCount + 1;
+    const endIdx = projCount + cachedConvs.length;
+    lines.push(`\n💬 Conversations（电脑端已打开的会话，发 ws ${startIdx}~${endIdx} 直接进入）：`);
+    for (let i = 0; i < cachedConvs.length; i++) {
+      const c = cachedConvs[i];
+      const proj = c.projectName ? ` [${c.projectName}]` : '';
+      const active = c.id === currentCascadeId ? '👉 ' : '  ';
+      lines.push(`${active}${startIdx + i}. ${c.title}${proj} (${c.steps || 0}步)`);
+    }
+  }
   return lines.join('\n');
 }
 
 async function createConv(workspace: string): Promise<string> {
-  const d = await post('/api/conversations', { workspace });
+  if (workspace === 'playground') {
+    const d = await post('/api/conversations', {});
+    if (!d.cascadeId) throw new Error(d.message || d.error || '创建对话失败');
+    return d.cascadeId;
+  }
+  const matched = runningWorkspaces.find(w => w.workspace === workspace);
+  const body = matched?.projectId ? { projectId: matched.projectId } : { workspace };
+  const d = await post('/api/conversations', body);
   if (!d.cascadeId) throw new Error(d.message || d.error || '创建对话失败');
   return d.cascadeId;
 }
@@ -327,31 +370,66 @@ function progressBar(frac: number): string {
 
 async function cmdWorkspace(sid: string, session: Session, arg: string): Promise<string> {
   await refreshWorkspaces();
-  const total = runningWorkspaces.length + 1; // +1 for playground
+  const projTotal = runningWorkspaces.length + 1; // +1 for playground
+  const allTotal = projTotal + cachedConvs.length;
 
   if (!arg) {
-    if (runningWorkspaces.length === 0) return '⚠️ 没有运行中的工作区。请先在 Antigravity 中打开项目。';
+    if (runningWorkspaces.length === 0 && cachedConvs.length === 0) {
+      return '⚠️ 没有运行中的工作区或历史会话。请先在 Antigravity 中打开项目。';
+    }
     const cur = session.workspace
       ? session.workspace.replace('file://', '').split('/').pop()
       : '(未绑定)';
-    return `当前工作区: ${cur}\n\n📂 运行中的工作区（发 ws <编号> 切换）：\n\n${fmtWorkspaceList()}`;
+    const curConv = session.cascadeId ? ` (对话: ${session.cascadeId.slice(0, 8)})` : '';
+    return `当前状态: ${cur}${curConv}\n\n${fmtWorkspaceList(session.cascadeId)}`;
   }
 
   const num = parseInt(arg, 10);
-  if (num >= 1 && num <= total) {
+  if (num >= 1 && num <= projTotal) {
     const ws = num <= runningWorkspaces.length ? runningWorkspaces[num - 1].workspace : 'playground';
     try {
       const cascadeId = await createConv(ws);
       session.cascadeId = cascadeId;
       session.workspace = ws;
       const name = ws === 'playground' ? 'Playground' : ws.replace('file://', '').split('/').pop();
-      return `✅ 已切换工作区: ${name}\n新对话已创建。`;
+      return `✅ 已切换工作区: ${name}\n新对话已创建 (${cascadeId.slice(0, 8)})。`;
     } catch (e: any) {
       return `❌ 切换失败: ${e.message}`;
     }
+  } else if (num > projTotal && num <= allTotal) {
+    const target = cachedConvs[num - projTotal - 1];
+    session.cascadeId = target.id;
+    session.workspace = target.title || target.projectName || 'Conversation';
+    const proj = target.projectName ? ` [${target.projectName}]` : '';
+    return `✅ 已接入电脑端会话: ${target.title}${proj}\n对话 ID: ${target.id.slice(0, 8)} (${target.steps || 0}步)\n现在发送的消息将直接在该会话中继续。`;
   }
 
-  return `❌ 无效编号。发 ws 查看列表。`;
+  return `❌ 无效编号。发 ws 查看 Projects 与 Conversations 列表。`;
+}
+
+async function cmdConversations(sid: string, session: Session, arg: string): Promise<string> {
+  if (!arg || cachedConvs.length === 0) {
+    cachedConvs = (await get('/api/conversations')).slice(0, 20);
+  }
+  if (!arg) {
+    if (!cachedConvs.length) return '⚠️ 暂无历史对话';
+    const cur = session.cascadeId ? session.cascadeId.slice(0, 8) : '(无)';
+    const lines = cachedConvs.map((c: any, i: number) => {
+      const proj = c.projectName ? ` [${c.projectName}]` : '';
+      const active = c.id === session.cascadeId ? '👉 ' : '   ';
+      return `${active}${i + 1}. ${c.title}${proj} (${c.steps || 0}步, ${c.id.slice(0, 8)})`;
+    });
+    return `当前对话: ${cur}\n\n💬 电脑端已打开的 Conversations（发 对话 <编号> 接入该会话）：\n\n${lines.join('\n')}`;
+  }
+  const num = parseInt(arg, 10);
+  if (num >= 1 && num <= cachedConvs.length) {
+    const target = cachedConvs[num - 1];
+    session.cascadeId = target.id;
+    session.workspace = target.title || target.projectName || 'Conversation';
+    const proj = target.projectName ? ` [${target.projectName}]` : '';
+    return `✅ 已接入电脑端会话: ${target.title}${proj}\n对话 ID: ${target.id.slice(0, 8)} (${target.steps || 0}步)\n现在发送的消息将直接在该会话中继续。`;
+  }
+  return '❌ 无效编号。发 对话 查看最近对话列表。';
 }
 
 async function cmdWorkflows(): Promise<string> {
@@ -386,7 +464,8 @@ function cmdHelp(): string {
     '── 模型和工作区 ──',
     '模型 — 查看可用模型和余量',
     '模型 <编号或名称> — 切换模型',
-    'ws — 查看/切换工作区',
+    'ws — 查看/切换工作区（新建对话）',
+    '对话 — 查看/接入 Antigravity 已有 Conversations',
     '状态 — 当前会话信息\n',
     '── 知识库 ──',
     'workflow — 列出可用工作流',
@@ -455,6 +534,9 @@ async function onPrompt(id: number | string, params: any) {
   } else if (lower.startsWith('/workspace') || lower.startsWith('ws ') || lower === 'ws' || lower === '工作区') {
     const arg = text.replace(/^(\/workspace|ws|工作区)\s*/i, '').trim();
     intercepted = await cmdWorkspace(sid, session, arg);
+  } else if (lower === '对话' || lower.startsWith('对话 ') || lower === 'convs' || lower.startsWith('convs ')) {
+    const arg = text.replace(/^(对话|convs)\s*/i, '').trim();
+    intercepted = await cmdConversations(sid, session, arg);
   } else if (lower === '/help' || lower === '帮助' || lower === '命令') {
     intercepted = cmdHelp();
   } else if (lower === 'workflow' || lower === 'workflows' || lower === '流程') {
@@ -511,10 +593,11 @@ async function onPrompt(id: number | string, params: any) {
 
 async function handleWsSelect(rpcId: number | string, sid: string, session: Session, text: string) {
   await refreshWorkspaces();
-  const total = runningWorkspaces.length + 1; // +1 for playground
+  const projTotal = runningWorkspaces.length + 1; // +1 for playground
+  const allTotal = projTotal + cachedConvs.length;
   const num = parseInt(text.trim(), 10);
 
-  if (num >= 1 && num <= total) {
+  if (num >= 1 && num <= projTotal) {
     const ws = num <= runningWorkspaces.length ? runningWorkspaces[num - 1].workspace : 'playground';
     try {
       session.cascadeId = await createConv(ws);
@@ -522,12 +605,18 @@ async function handleWsSelect(rpcId: number | string, sid: string, session: Sess
       const name = ws === 'playground' ? 'Playground' : ws.replace('file://', '').split('/').pop();
       reply(sid, `✅ 已绑定: ${name}\n\n现在可以开始对话了。`);
     } catch (e: any) {
-      reply(sid, `❌ 绑定失败: ${e.message}\n\n${fmtWorkspaceList()}`);
+      reply(sid, `❌ 绑定失败: ${e.message}\n\n${fmtWorkspaceList(session.cascadeId)}`);
     }
-  } else if (runningWorkspaces.length === 0) {
-    reply(sid, '⚠️ 没有运行中的工作区。请先在 Antigravity 中打开项目，然后发 /new 重试。');
+  } else if (num > projTotal && num <= allTotal) {
+    const target = cachedConvs[num - projTotal - 1];
+    session.cascadeId = target.id;
+    session.workspace = target.title || target.projectName || 'Conversation';
+    const proj = target.projectName ? ` [${target.projectName}]` : '';
+    reply(sid, `✅ 已接入电脑端会话: ${target.title}${proj}\n对话 ID: ${target.id.slice(0, 8)} (${target.steps || 0}步)\n\n现在可以继续对话了。`);
+  } else if (runningWorkspaces.length === 0 && cachedConvs.length === 0) {
+    reply(sid, '⚠️ 没有运行中的工作区或历史会话。请先在 Antigravity 中打开项目，然后发 /new 重试。');
   } else {
-    reply(sid, `📂 请选择工作区（发送数字）：\n\n${fmtWorkspaceList()}`);
+    reply(sid, `请选择要新建的 Project 或接入已有的 Conversation（发送数字）：\n\n${fmtWorkspaceList(session.cascadeId)}`);
   }
   ok(rpcId, { stopReason: 'end_turn' });
 }

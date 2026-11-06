@@ -24,11 +24,11 @@ name = "antigravity"
 type = "acp"
 
 [projects.agent.options]
-work_dir = "/path/to/your/project"   # ← 修改为你的项目路径
-command = "npx"
-args = ["tsx", "/path/to/Antigravity-Mobility-CLI/scripts/antigravity-acp.ts"]  # ← 修改
+work_dir = "/Users/SEI/.gemini/antigravity/scratch/Antigravity-Mobility-CLI"
+cmd = "/opt/homebrew/bin/npx"
+args = ["tsx", "/Users/SEI/.gemini/antigravity/scratch/Antigravity-Mobility-CLI/scripts/antigravity-acp.ts"]
 display_name = "Antigravity Agent"
-# env = { AG_BASE_URL = "http://127.0.0.1:3000" }  # 如果 Antigravity 不在默认端口
+env = { AG_BASE_URL = "http://127.0.0.1:3100", PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" }
 
 # 微信平台（ilink）
 [[projects.platforms]]

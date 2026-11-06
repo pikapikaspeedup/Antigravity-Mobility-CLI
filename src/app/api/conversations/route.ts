@@ -112,18 +112,20 @@ export async function GET() {
     const seen = new Set(results.map(c => c.id));
     for (const local of sqliteConvs) {
       if (seen.has(local.id) || hiddenChildIds.has(local.id)) continue;
+      if (!local.stepCount && (!local.title || local.title.startsWith('Conversation '))) continue;
       const matched = local.projectId ? getAgyProject(local.projectId) : (local.workspace ? findAgyProjectByFolder(local.workspace) : null);
-      results.unshift({
+      results.push({
         id: local.id,
         title: local.title || `Conversation ${local.id.slice(0, 8)}`,
         workspace: local.workspace || '',
         projectId: matched?.id || local.projectId,
         projectName: matched?.name,
-        mtime: local.createdAt ? Date.parse(local.createdAt) : Date.now(),
+        mtime: local.createdAt ? Date.parse(local.createdAt) : 0,
         steps: local.stepCount || 0,
       });
     }
 
+    results.sort((a, b) => b.mtime - a.mtime);
     convCache = results;
     return NextResponse.json(results);
   } catch (e: any) {

@@ -28,7 +28,7 @@
 
 export {};
 
-const BASE = process.env.AG_BASE_URL || 'http://localhost:3000';
+const BASE = process.env.AG_BASE_URL || 'http://localhost:3100';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
