@@ -138,8 +138,17 @@ export function grpcCall(opts: GrpcCallOptions): Promise<any> {
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
-          resolve(JSON.parse(data));
+          const parsed = JSON.parse(data);
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(parsed?.message || parsed?.error || `HTTP ${res.statusCode}`));
+            return;
+          }
+          resolve(parsed);
         } catch {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+            return;
+          }
           resolve(data);
         }
       });

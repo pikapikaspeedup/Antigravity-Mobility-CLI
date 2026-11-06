@@ -111,29 +111,34 @@ export function getConversations(): ConversationInfo[] {
     }
   } catch {}
 
-  // Step 2: Enrich with SQLite protobuf data (titles + workspace)
+  // Step 2: Enrich with SQLite 2.0 conversation_summaries.db data (titles + workspace + projectId)
   const protoConvs = getConversationsFromProtobuf();
   for (const pc of protoConvs) {
     const existing = convMap.get(pc.id);
     if (existing) {
-      // Enrich existing .pb entry with title/workspace from SQLite
       if (pc.title) existing.title = pc.title;
       if (pc.workspace) existing.workspace = pc.workspace;
+      if (pc.projectId) existing.projectId = pc.projectId;
       if (pc.stepCount) existing.stepCount = pc.stepCount;
+      if (pc.createdAt) existing.createdAt = pc.createdAt;
     } else {
-      // Conversation in SQLite but not in .pb dir (shouldn't happen, but include it)
       convMap.set(pc.id, pc);
     }
   }
 
-  // Step 3: Merge local cache (newly created conversations or renamed ones)
+  // Step 3: Merge local cache (only enrich existing .pb/SQLite conversations; ignore 0-step unpersisted entries)
   const localConvs = readLocalCache();
   for (const lc of localConvs) {
     const existing = convMap.get(lc.id);
     if (existing) {
-      if (lc.title) existing.title = lc.title; // Local title overrides SQLite
+      if (lc.title && lc.title !== 'New conversation' && !lc.title.startsWith('New: ')) {
+        existing.title = lc.title;
+      } else if (!existing.title && lc.title) {
+        existing.title = lc.title;
+      }
       if (lc.workspace) existing.workspace = lc.workspace;
-    } else {
+      if (lc.projectId) existing.projectId = lc.projectId;
+    } else if (lc.stepCount > 0) {
       convMap.set(lc.id, lc);
     }
   }
@@ -195,75 +200,41 @@ export function getConversations(): ConversationInfo[] {
   return Array.from(convMap.values());
 }
 
-function getConversationsFromProtobuf(): Array<{ id: string; title: string; workspace: string; stepCount: number }> {
+function getConversationsFromProtobuf(): Array<ConversationInfo> {
+  const summariesDb = path.join(homedir(), '.gemini/antigravity/conversation_summaries.db');
   try {
-    const script = `
-import sqlite3, base64, json, os
-import blackboxprotobuf
-
-db = sqlite3.connect(os.path.expanduser("~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb"))
-raw = db.execute("SELECT value FROM ItemTable WHERE key='antigravityUnifiedStateSync.trajectorySummaries';").fetchone()
-if not raw or not raw[0]:
-    print("[]")
-    exit()
-
-decoded = base64.b64decode(raw[0])
-msg, _ = blackboxprotobuf.decode_message(decoded)
-trajectories = msg.get("1", [])
-if not isinstance(trajectories, list):
-    trajectories = [trajectories]
-
-result = []
-for t in trajectories:
-    cid = t.get("1", b"")
-    if isinstance(cid, bytes): cid = cid.decode()
-    else: cid = str(cid)
-
-    title = ""
-    workspace = ""
-    step_count = 0
-
-    inner = t.get("2", {})
-    inner_b64 = inner.get("1", b"")
-    if isinstance(inner_b64, bytes): inner_b64 = inner_b64.decode()
-
-    try:
-        ib = base64.b64decode(inner_b64)
-        im, _ = blackboxprotobuf.decode_message(ib)
-        rt = im.get("1", b"")
-        if isinstance(rt, bytes): title = rt.decode('utf-8', errors='replace')
-        else: title = str(rt)
-        sc = im.get("2", 0)
-        if isinstance(sc, (int, float)): step_count = int(sc)
-        ws9 = im.get("9", {})
-        ws17 = im.get("17", {})
-        if isinstance(ws9, dict):
-            w = ws9.get("1", b"")
-            if isinstance(w, bytes): workspace = w.decode('utf-8', errors='replace')
-            elif isinstance(w, dict):
-                ww = w.get("1", b"")
-                if isinstance(ww, bytes): workspace = ww.decode('utf-8', errors='replace')
-        if not workspace and isinstance(ws17, dict):
-            w = ws17.get("7", b"")
-            if isinstance(w, bytes): workspace = w.decode('utf-8', errors='replace')
-            elif isinstance(w, str): workspace = w
-            if not workspace:
-                w1 = ws17.get("1", {})
-                if isinstance(w1, dict):
-                    ww = w1.get("1", b"")
-                    if isinstance(ww, bytes): workspace = ww.decode('utf-8', errors='replace')
-    except:
-        pass
-    result.append({"id": cid, "title": title, "workspace": workspace, "stepCount": step_count})
-db.close()
-print(json.dumps(result, ensure_ascii=False))
-`;
-    const output = execSync(`python3 -c '${script.replace(/'/g, "'\\''")}'`, {
+    const sql = `SELECT conversation_id AS id, title, step_count AS stepCount, last_modified_time AS updatedAt, workspace_uris AS workspaceUris, project_id AS projectId FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC;`;
+    const output = execSync(`sqlite3 -json "${summariesDb}" "${sql}" 2>/dev/null`, {
       encoding: 'utf-8',
-      timeout: 15000
-    });
-    return JSON.parse(output.trim());
-  } catch {
-    return [];
-  }
+      timeout: 5000,
+    }).trim();
+    if (output) {
+      const rows = JSON.parse(output) as Array<{
+        id: string;
+        title: string;
+        stepCount: number;
+        updatedAt: string;
+        workspaceUris: string;
+        projectId: string;
+      }>;
+      return rows.map(r => {
+        let workspace = '';
+        if (r.workspaceUris) {
+          try {
+            const uris = JSON.parse(r.workspaceUris);
+            if (Array.isArray(uris) && uris.length > 0) workspace = uris[0];
+          } catch {}
+        }
+        return {
+          id: r.id,
+          title: r.title || '',
+          workspace,
+          projectId: r.projectId && r.projectId !== 'outside-of-project' ? r.projectId : undefined,
+          stepCount: r.stepCount || 0,
+          createdAt: r.updatedAt,
+        };
+      });
+    }
+  } catch {}
+  return [];
 }

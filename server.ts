@@ -112,6 +112,18 @@ app.prepare().then(() => {
           }
         },
         async (err: Error) => {
+          if (err.message.includes('not_found') || err.message.includes('not found in any store')) {
+            log.warn({ cascadeId: cascadeId.slice(0,8), err: err.message }, 'Trajectory not found, stopping stream');
+            activeStreams.delete(cascadeId);
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                cascadeId,
+                message: `对话不存在或未持久化 (${cascadeId.slice(0, 8)})，请发送 ws 重新选择工作区或已有对话`,
+              }));
+            }
+            return;
+          }
           log.warn({ cascadeId: cascadeId.slice(0,8), err: err.message }, 'Stream ended, reconnecting...');
           setTimeout(async () => {
             if (ws.readyState === ws.OPEN) {
