@@ -439,7 +439,11 @@ function progressBar(frac: number): string {
 }
 
 async function cmdWorkspace(sid: string, session: Session, arg: string): Promise<string> {
-  await refreshWorkspaces();
+  // Always fetch live data when listing (!arg), or if cache is empty when selecting by number
+  // so the numbering doesn't shift between viewing `ws` and sending `ws <num>`.
+  if (!arg || (runningWorkspaces.length === 0 && cachedConvs.length === 0)) {
+    await refreshWorkspaces();
+  }
   const projTotal = runningWorkspaces.length + 1; // +1 for playground
   const allTotal = projTotal + cachedConvs.length;
 
@@ -666,10 +670,12 @@ async function onPrompt(id: number | string, params: any) {
 }
 
 async function handleWsSelect(rpcId: number | string, sid: string, session: Session, text: string) {
-  await refreshWorkspaces();
+  const num = parseInt(text.trim(), 10);
+  if (isNaN(num) || (runningWorkspaces.length === 0 && cachedConvs.length === 0)) {
+    await refreshWorkspaces();
+  }
   const projTotal = runningWorkspaces.length + 1; // +1 for playground
   const allTotal = projTotal + cachedConvs.length;
-  const num = parseInt(text.trim(), 10);
 
   if (num >= 1 && num <= projTotal) {
     const ws = num <= runningWorkspaces.length ? runningWorkspaces[num - 1].workspace : 'playground';
