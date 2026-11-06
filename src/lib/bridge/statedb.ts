@@ -126,14 +126,19 @@ export function getConversations(): ConversationInfo[] {
     }
   }
 
-  // Step 3: Merge local cache (newly created conversations or renamed ones)
+  // Step 3: Merge local cache (only enrich existing .pb/SQLite conversations; ignore 0-step unpersisted entries)
   const localConvs = readLocalCache();
   for (const lc of localConvs) {
     const existing = convMap.get(lc.id);
     if (existing) {
-      if (lc.title) existing.title = lc.title; // Local title overrides SQLite
+      if (lc.title && lc.title !== 'New conversation' && !lc.title.startsWith('New: ')) {
+        existing.title = lc.title;
+      } else if (!existing.title && lc.title) {
+        existing.title = lc.title;
+      }
       if (lc.workspace) existing.workspace = lc.workspace;
-    } else {
+      if (lc.projectId) existing.projectId = lc.projectId;
+    } else if (lc.stepCount > 0) {
       convMap.set(lc.id, lc);
     }
   }

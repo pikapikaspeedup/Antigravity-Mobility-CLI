@@ -179,112 +179,182 @@ async function createConv(workspace: string): Promise<string> {
   return d.cascadeId;
 }
 
-// ─── WebSocket: wait for full response ───────────────────────────────────
+// ─── WebSocket: stream steps & wait for completion ───────────────────────
+
+function formatToolCall(toolName: string, argumentsJson?: string): string {
+  if (!argumentsJson) return toolName;
+  try {
+    const args = JSON.parse(argumentsJson);
+    if (args.toolSummary) return `${toolName} (${args.toolSummary})`;
+    if (args.Path) {
+      const shortPath = String(args.Path).split('/').slice(-2).join('/');
+      return `${toolName} (${shortPath})`;
+    }
+    if (args.CommandLine) {
+      const cmd = String(args.CommandLine).replace(/\s+/g, ' ').slice(0, 50);
+      return `${toolName} (${cmd}${ String(args.CommandLine).length > 50 ? '…' : '' })`;
+    }
+    if (args.query || args.Query) return `${toolName} (${args.query || args.Query})`;
+    if (args.Role) return `${toolName} (${args.Role})`;
+  } catch {}
+  return toolName;
+}
 
 /**
- * Subscribe to cascadeId via WebSocket, then call onReady() which should
- * trigger the agent (e.g. POST /send). Accumulates all step text and
- * returns the FINAL complete text when the agent turn finishes.
- *
- * This order (subscribe first, then send) prevents a race condition where
- * a fast model (e.g. Flash) finishes before the WS connection is ready.
+ * Subscribe to cascadeId via WebSocket, then call onReady() which triggers
+ * POST /send. Streams tool calls and model responses incrementally via reply()
+ * as they happen, and resolves when the agent turn finishes.
  */
-function waitDone(session: Session, onReady: () => Promise<void>): Promise<string> {
+function waitDone(
+  sid: string,
+  session: Session,
+  onReady: () => Promise<void>,
+): Promise<{ emitted: boolean; error?: string }> {
   return new Promise((resolve) => {
     const ws = new WebSocket(BASE.replace(/^http/, 'ws') + '/ws');
     session.ws = ws;
 
     let done = false;
-    let text = '';
-    let gotFirstMessage = false;
     let readySent = false;
-    let wasRunning = false; // track if agent ever entered running state
+    let wasRunning = false;
+    let sawNewAgentStep = false;
+    let startStepIndex = 0;
+    let hasEmitted = false;
+    let errorMsg: string | undefined;
+
+    const streamedLengths = new Map<number, number>();
+    const announcedTools = new Set<string>();
 
     function finish() {
       if (done) return;
       done = true;
+      clearTimeout(timer);
+      clearTimeout(readyTimer);
       session.ws = undefined;
       try { ws.close(); } catch {}
-      resolve(text);
+      resolve({ emitted: hasEmitted, error: errorMsg });
     }
 
-    const timer = setTimeout(finish, 5 * 60 * 1000);
+    async function triggerReady() {
+      if (readySent || done) return;
+      readySent = true;
+      clearTimeout(readyTimer);
+      try {
+        await onReady();
+      } catch (e: any) {
+        errorMsg = e.message || '发送消息失败';
+        finish();
+      }
+    }
+
+    const timer = setTimeout(() => {
+      if (!hasEmitted && !errorMsg) {
+        errorMsg = '任务等待超时（15分钟），请检查电脑端 Antigravity 状态';
+      }
+      finish();
+    }, 15 * 60 * 1000);
+
+    let readyTimer: ReturnType<typeof setTimeout>;
 
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'subscribe', cascadeId: session.cascadeId }));
+      // Fallback: if no initial WS snapshot arrives within 2s, trigger onReady anyway
+      readyTimer = setTimeout(() => { triggerReady(); }, 2000);
     });
 
     ws.on('message', async (raw: Buffer) => {
       if (done || session.cancelled) { finish(); return; }
       try {
         const m = JSON.parse(raw.toString());
+        if (m.type === 'error' && (!m.cascadeId || m.cascadeId === session.cascadeId)) {
+          errorMsg = m.message || '对话连接异常';
+          finish();
+          return;
+        }
         if (m.cascadeId !== session.cascadeId) return;
 
-        // After first message (initial state snapshot), fire the POST /send.
-        // IMPORTANT: return immediately after onReady — this first message is
-        // the snapshot *before* agent starts; we must NOT evaluate its
-        // isActive (which is false/idle) or we'd finish() prematurely.
+        // First message is the initial snapshot before our prompt is sent
         if (!readySent) {
-          readySent = true;
-          try { await onReady(); } catch (e: any) {
-            text = `❌ ${e.message}`;
-            finish();
-          }
-          return; // skip further processing of the initial snapshot
+          startStepIndex = m.data?.steps?.length ?? m.stepCount ?? 0;
+          await triggerReady();
+          return;
         }
 
-        if (m.type === 'steps' && m.data?.steps) {
-          const newText = fmtSteps(m.data.steps);
-          if (newText) text = newText;
-          gotFirstMessage = true;
+        if (m.type === 'steps' && Array.isArray(m.data?.steps)) {
+          const steps: any[] = m.data.steps;
+          for (let idx = startStepIndex; idx < steps.length; idx++) {
+            const s = steps[idx];
+            if (!s?.type) continue;
+            const t = s.type.replace('CORTEX_STEP_TYPE_', '');
+
+            if (t === 'PLANNER_RESPONSE') {
+              let txt = s.plannerResponse?.modifiedResponse || s.plannerResponse?.response || '';
+              txt = txt.replace(/\[([^\]]+)\]\(cci:[^)]+\)/g, '$1');
+              const prevLen = streamedLengths.get(idx) || 0;
+              if (txt.length > prevLen) {
+                const prefix = prevLen === 0 && hasEmitted ? '\n\n' : '';
+                const delta = prefix + txt.slice(prevLen);
+                streamedLengths.set(idx, txt.length);
+                hasEmitted = true;
+                reply(sid, delta);
+              }
+            } else if (t === 'TASK_BOUNDARY') {
+              const tb = s.taskBoundary;
+              const tbKey = `tb_${idx}`;
+              if (tb?.taskName && !announcedTools.has(tbKey)) {
+                announcedTools.add(tbKey);
+                const prefix = hasEmitted ? '\n' : '';
+                hasEmitted = true;
+                reply(sid, `${prefix}📋 ${(tb.mode || '').replace('MODE_', '')}: ${tb.taskName}\n`);
+              }
+            } else if (t === 'ERROR_MESSAGE') {
+              const errKey = `err_${idx}`;
+              if (!announcedTools.has(errKey)) {
+                announcedTools.add(errKey);
+                const shortErr = s.errorMessage?.error?.shortError || s.errorMessage?.message || '步骤执行异常';
+                const prefix = hasEmitted ? '\n' : '';
+                hasEmitted = true;
+                reply(sid, `${prefix}⚠️ ${shortErr}\n`);
+              }
+            } else if (t !== 'USER_INPUT' && t !== 'CHECKPOINT' && t !== 'SYSTEM_MESSAGE') {
+              const tc = s.metadata?.toolCall;
+              const toolName = tc?.name || s.action?.toolName || s.toolResult?.toolName || s.title || '';
+              if (toolName) {
+                const tcKey = tc?.id || `step_${idx}`;
+                if (!announcedTools.has(tcKey)) {
+                  announcedTools.add(tcKey);
+                  const label = formatToolCall(toolName, tc?.argumentsJson);
+                  const prefix = hasEmitted ? '\n' : '';
+                  hasEmitted = true;
+                  reply(sid, `${prefix}🔧 ${label}\n`);
+                }
+              }
+            }
+          }
 
           if (m.isActive) wasRunning = true;
+          if (steps.length > startStepIndex + 1) sawNewAgentStep = true;
 
-          if (wasRunning && (!m.isActive || m.cascadeStatus === 'idle')) {
+          if ((wasRunning || sawNewAgentStep) && (!m.isActive || m.cascadeStatus === 'idle')) {
             finish();
           }
         } else if (m.type === 'status') {
           if (m.isActive) wasRunning = true;
+          if ((m.stepCount ?? 0) > startStepIndex + 1) sawNewAgentStep = true;
 
-          if (wasRunning && (!m.isActive || m.cascadeStatus === 'idle')) {
+          if ((wasRunning || sawNewAgentStep) && (!m.isActive || m.cascadeStatus === 'idle')) {
             finish();
           }
         }
       } catch {}
     });
 
-    ws.on('error', () => finish());
-    ws.on('close', () => { clearTimeout(timer); finish(); });
+    ws.on('error', (e: any) => {
+      errorMsg = `WebSocket 连接错误: ${e.message || '未知错误'}`;
+      finish();
+    });
+    ws.on('close', () => { finish(); });
   });
-}
-
-function fmtSteps(steps: any[]): string {
-  const parts: string[] = [];
-  for (const s of steps) {
-    if (!s?.type) continue;
-    const t = s.type.replace('CORTEX_STEP_TYPE_', '');
-    switch (t) {
-      case 'PLANNER_RESPONSE': {
-        let txt = s.plannerResponse?.modifiedResponse || s.plannerResponse?.response || '';
-        // Strip cci:// editor links — not useful in WeChat
-        txt = txt.replace(/\[([^\]]+)\]\(cci:[^)]+\)/g, '$1');
-        if (txt) parts.push(txt);
-        break;
-      }
-      case 'CODE_ACTION': case 'TOOL_RESULT': case 'ACTION': {
-        const name = s.action?.toolName || s.toolResult?.toolName || s.title || '';
-        const st = (s.status || '').replace('CORTEX_STEP_STATUS_', '');
-        if (name) parts.push(`🔧 ${name} ${st === 'DONE' ? '✅' : st === 'ERROR' ? '❌' : '⏳'}`);
-        break;
-      }
-      case 'TASK_BOUNDARY': {
-        const tb = s.taskBoundary;
-        if (tb?.taskName) parts.push(`📋 ${(tb.mode || '').replace('MODE_', '')}: ${tb.taskName}`);
-        break;
-      }
-    }
-  }
-  return parts.join('\n');
 }
 
 // ─── Slash command handlers ──────────────────────────────────────────────
@@ -572,14 +642,18 @@ async function onPrompt(id: number | string, params: any) {
       }
     }
 
-    const response = await waitDone(session, async () => {
+    const res = await waitDone(sid, session, async () => {
       await post(`/api/conversations/${session.cascadeId}/send`, {
         text: msgText,
         model: session.model,
         agenticMode: true,
       });
     });
-    reply(sid, response || '(空回复)');
+    if (res.error) {
+      reply(sid, `${res.emitted ? '\n\n' : ''}❌ ${res.error}`);
+    } else if (!res.emitted) {
+      reply(sid, '⚠️ 未收到模型输出（该会话可能已失效或仍在后台运行，请发 ws 重新选择会话）');
+    }
     ok(id, { stopReason: session.cancelled ? 'cancelled' : 'end_turn' });
   } catch (e: any) {
     if (session.cancelled) {

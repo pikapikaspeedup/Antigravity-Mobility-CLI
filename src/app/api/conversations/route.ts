@@ -112,7 +112,7 @@ export async function GET() {
     const seen = new Set(results.map(c => c.id));
     for (const local of sqliteConvs) {
       if (seen.has(local.id) || hiddenChildIds.has(local.id)) continue;
-      if (!local.stepCount && (!local.title || local.title.startsWith('Conversation '))) continue;
+      if (!local.stepCount && (!local.title || local.title.startsWith('Conversation ') || local.title === 'New conversation' || local.title.startsWith('New: '))) continue;
       const matched = local.projectId ? getAgyProject(local.projectId) : (local.workspace ? findAgyProjectByFolder(local.workspace) : null);
       results.push({
         id: local.id,
